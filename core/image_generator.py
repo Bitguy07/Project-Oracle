@@ -32,14 +32,13 @@ POLLINATIONS_PARAMS = {
 }
 
 # Hugging Face fallback
-HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
 
 # Dimensions per post type
 DIMENSIONS = {
     "reel": (1080, 1920),
     "feed": (1080, 1350),
 }
-
 
 class ImageGenerator:
     def __init__(self):
@@ -88,7 +87,7 @@ class ImageGenerator:
         url = (
             f"{POLLINATIONS_URL.format(prompt=encoded)}"
             f"?width={width}&height={height}"
-            f"&model=flux&seed={seed}&nologo=true&enhance=true"
+            f"&model=turbo&seed={seed}&nologo=true"
         )
         log.debug(f"Pollinations URL: {url[:120]}...")
 
@@ -98,7 +97,7 @@ class ImageGenerator:
                 if r.status_code == 200:
                     break
                 log.warning(f"Pollinations attempt {attempt+1} failed: HTTP {r.status_code}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(2)
             if r.status_code != 200:
                 raise RuntimeError(f"HTTP {r.status_code}")
             if len(r.content) < 5000:
