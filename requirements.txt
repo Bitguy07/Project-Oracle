@@ -1,0 +1,14 @@
+# Project Oracle — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Google Gemini AI
+google-generativeai>=0.7.0
+
+# HTTP client (async)
+httpx>=0.27.0
+
+# Standard utilities
+python-dotenv>=1.0.0      # Local .env file support
+
+# Type hints / data validation
+typing-extensions>=4.10.0
