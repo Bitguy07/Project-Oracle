@@ -19,11 +19,6 @@ log = logging.getLogger("oracle.intelligence")
 
 # ── Gemini Config ──────────────────────────────────────────────────────────────
 MODEL_NAME = "gemini-2.0-flash-lite"
-GENERATION_CONFIG = {
-    "temperature": 0.9,
-    "top_p": 0.95,
-    "max_output_tokens": 1024,
-}
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +80,9 @@ class IntelligenceEngine:
                 temperature=0.9,
                 top_p=0.95,
                 max_output_tokens=1024,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
             )
         )
         raw = response.text.strip()
