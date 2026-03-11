@@ -67,34 +67,90 @@ class InstagramPublisher:
         # ── Step 4: Publish ────────────────────────────────────────────────
         ig_post_id = await self._publish_container(container_id)
         log.info(f"Published! IG Post ID: {ig_post_id}")
+        # Clean up temp release
+        await self._cleanup_temp_release()
 
         return {"ig_post_id": ig_post_id, "container_id": container_id}
 
     async def _upload_to_temp_host(self, video_path: Path) -> str:
         """
-        Upload video to 0x0.st — stable developer file host.
-        No auth required, returns direct URL.
+        Upload video as a GitHub Release asset — always works from GitHub Actions.
+        Uses the same GIST_TOKEN we already have.
+        Returns public download URL, deletes release after Instagram fetches it.
         """
-        video_bytes = video_path.read_bytes()
-        file_size_mb = len(video_bytes) / (1024 * 1024)
-        log.info(f"Uploading {file_size_mb:.1f}MB video to 0x0.st...")
+        import base64
+        import time
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        github_token = os.environ.get("GIST_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        gh_repo = "Bitguy07/Project-Oracle"
+        tag = f"temp-video-{int(time.time())}"
+
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "ProjectOracle/1.0",
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+
+            # Step 1: Create a temporary release
             r = await client.post(
-                "https://0x0.st",
-                files={"file": (video_path.name, video_bytes, "video/mp4")},
+                f"https://api.github.com/repos/{gh_repo}/releases",
+                headers=headers,
+                json={
+                    "tag_name": tag,
+                    "name": f"Temp video {tag}",
+                    "body": "Temporary video for Instagram upload. Will be deleted.",
+                    "draft": False,
+                    "prerelease": True,
+                },
             )
+            release = r.json()
+            if "id" not in release:
+                raise RuntimeError(f"Failed to create release: {release}")
 
-        if r.status_code != 200:
-            raise RuntimeError(f"0x0.st upload failed: HTTP {r.status_code} — {r.text[:200]}")
+            release_id = release["id"]
+            upload_url = release["upload_url"].replace("{?name,label}", "")
+            log.info(f"Created temp release: {release_id}")
 
-        url = r.text.strip()
-        log.info(f"Video URL: {url}")
+            # Step 2: Upload video as release asset
+            video_bytes = video_path.read_bytes()
+            r = await client.post(
+                f"{upload_url}?name={video_path.name}",
+                headers={
+                    **headers,
+                    "Content-Type": "video/mp4",
+                },
+                content=video_bytes,
+                timeout=120.0,
+            )
+            asset = r.json()
+            if "browser_download_url" not in asset:
+                raise RuntimeError(f"Asset upload failed: {asset}")
 
-        if not url.startswith("https://"):
-            raise RuntimeError(f"Invalid URL returned: {url}")
+            video_url = asset["browser_download_url"]
+            log.info(f"Video hosted at: {video_url}")
 
-        return url
+            # Store release_id for cleanup after publishing
+            self._temp_release_id = release_id
+            self._gh_repo = gh_repo
+            self._gh_headers = headers
+
+            return video_url
+
+    async def _cleanup_temp_release(self):
+        """Delete the temporary GitHub release after Instagram has fetched the video."""
+        if not hasattr(self, "_temp_release_id"):
+            return
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.delete(
+                    f"https://api.github.com/repos/{self._gh_repo}/releases/{self._temp_release_id}",
+                    headers=self._gh_headers,
+                )
+            log.info(f"Deleted temp release {self._temp_release_id}")
+        except Exception as e:
+            log.warning(f"Failed to delete temp release: {e}")
     
     async def _create_container(
         self,
