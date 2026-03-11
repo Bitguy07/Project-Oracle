@@ -18,7 +18,7 @@ from google.genai import types
 log = logging.getLogger("oracle.intelligence")
 
 # ── Gemini Config ──────────────────────────────────────────────────────────────
-MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.0-flash-lite"
 GENERATION_CONFIG = {
     "temperature": 0.9,
     "top_p": 0.95,
