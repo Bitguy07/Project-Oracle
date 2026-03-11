@@ -72,28 +72,28 @@ class InstagramPublisher:
 
     async def _upload_to_temp_host(self, video_path: Path) -> str:
         """
-        Upload video to file.io — free temporary file host.
-        Returns a public URL Instagram can fetch from.
-        Auto-deletes after first download.
+        Upload video to tmpfiles.org — free, no auth, returns direct URL.
         """
         video_bytes = video_path.read_bytes()
         file_size_mb = len(video_bytes) / (1024 * 1024)
         log.info(f"Uploading {file_size_mb:.1f}MB video to temp host...")
 
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        # Use www.file.io directly (skip redirect)
+        async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(
-                "https://file.io/?expires=1d",
+                "https://www.file.io",
                 files={"file": (video_path.name, video_bytes, "video/mp4")},
             )
             data = r.json()
+            log.info(f"file.io response: {data}")
 
         if not data.get("success"):
             raise RuntimeError(f"file.io upload failed: {data}")
 
         url = data.get("link")
-        log.info(f"Uploaded successfully: {url}")
+        log.info(f"Video URL: {url}")
         return url
-
+    
     async def _create_container(
         self,
         video_url: str,
