@@ -83,6 +83,7 @@ class AudioFetcher:
                 "key": self.pixabay_key,
                 "q": query,
                 "media_type": "music",
+                "category": "music",
                 "per_page": 20,
                 "safesearch": "true",
                 "order": "popular",
@@ -103,16 +104,12 @@ class AudioFetcher:
         track = random.choice(hits)
         track_id = track.get("id", "unknown")
  
-        # Extract audio URL — Pixabay music tracks have a direct 'audio' field
-        audio = track.get("audio")
-        if isinstance(audio, dict):
-            audio_url = audio.get("mp3") or audio.get("url")
-        else:
-            audio_url = audio or track.get("url")
- 
+        # Extract audio URL (Pixabay music preview)
+        audio_url = track.get("previewURL")
+
         if not audio_url:
             log.warning(f"Track {track_id} keys: {list(track.keys())}")
-            raise RuntimeError(f"No audio URL in track {track_id}")
+            raise RuntimeError(f"No audio preview URL in track {track_id}")
  
         log.info(f"Downloading track id={track_id}: {str(audio_url)[:80]}")
  

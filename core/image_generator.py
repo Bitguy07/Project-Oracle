@@ -78,11 +78,11 @@ class ImageGenerator:
             f"ultra high quality, Instagram-ready visual."
         )
  
-        log.info(f"Calling gemini-2.5-flash-image, ratio={aspect_ratio}")
+        log.info(f"Calling gemini-2.0-flash-exp-image-generation, ratio={aspect_ratio}")
  
         response = await asyncio.to_thread(
             self.client.models.generate_content,
-            model="gemini-2.5-flash-image",
+            model="gemini-2.0-flash-exp-image-generation",
             contents=enhanced_prompt,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
