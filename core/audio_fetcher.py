@@ -1,19 +1,16 @@
 """
 core/audio_fetcher.py
-Fetches royalty-free background music via Pixabay API.
+Fetches royalty-free background music using Mixkit direct CDN URLs.
  
-Pixabay License: Free for commercial use, no attribution required.
-Uses your existing PIXABAY_API_KEY secret — no new signup needed.
-Searches by topic-based query for relevant music.
-Falls back to silent audio if API fails.
+Mixkit License: Completely free, no attribution required, commercial use OK.
+No API key, no signup, no rate limits.
+Direct CDN pattern: https://assets.mixkit.co/music/download/mixkit-{name}-{id}.mp3
  
-Correct endpoint: https://pixabay.com/api/
-  Parameter: media_type=music
+Falls back to silent audio if all downloads fail.
 """
  
 import hashlib
 import logging
-import os
 import random
 import subprocess
 from pathlib import Path
@@ -27,110 +24,103 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
  
 AUDIO_DURATION = {"reel": 30, "feed": 15}
  
-PIXABAY_API = "https://pixabay.com/api/"
+BASE = "https://assets.mixkit.co/music/download"
  
-# Topic → search query for Pixabay music
-TOPIC_QUERY_MAP = {
-    "stoicism":    "meditation calm peaceful",
-    "philosophy":  "ambient instrumental calm",
-    "motivation":  "inspiring uplifting energetic",
-    "mindfulness": "meditation relaxing peaceful",
-    "success":     "inspiring motivational upbeat",
-    "nature":      "nature ambient peaceful",
-    "space":       "cinematic ambient electronic",
-    "technology":  "electronic ambient futuristic",
-    "fitness":     "energetic upbeat workout",
-    "wisdom":      "meditation calm ambient",
-    "life":        "inspiring ambient peaceful",
+# Verified Mixkit direct CDN URLs — royalty free, no attribution needed
+# Format: https://assets.mixkit.co/music/download/mixkit-{slug}-{id}.mp3
+CC0_TRACKS = {
+    "meditation": [
+        f"{BASE}/mixkit-serene-view-443.mp3",
+        f"{BASE}/mixkit-silence-between-the-notes-562.mp3",
+        f"{BASE}/mixkit-a-very-happy-christmas-897.mp3",
+        f"{BASE}/mixkit-dreaming-big-31.mp3",
+    ],
+    "ambient": [
+        f"{BASE}/mixkit-deep-urban-623.mp3",
+        f"{BASE}/mixkit-valley-sunset-127.mp3",
+        f"{BASE}/mixkit-an-eternity-142.mp3",
+        f"{BASE}/mixkit-serene-view-443.mp3",
+    ],
+    "uplifting": [
+        f"{BASE}/mixkit-positive-vibrations-693.mp3",
+        f"{BASE}/mixkit-uplift-me-532.mp3",
+        f"{BASE}/mixkit-raising-me-higher-34.mp3",
+        f"{BASE}/mixkit-spirit-in-the-woods-138.mp3",
+    ],
+    "cinematic": [
+        f"{BASE}/mixkit-deep-urban-623.mp3",
+        f"{BASE}/mixkit-an-eternity-142.mp3",
+        f"{BASE}/mixkit-valley-sunset-127.mp3",
+        f"{BASE}/mixkit-dreaming-big-31.mp3",
+    ],
+    "energetic": [
+        f"{BASE}/mixkit-positive-vibrations-693.mp3",
+        f"{BASE}/mixkit-raising-me-higher-34.mp3",
+        f"{BASE}/mixkit-uplift-me-532.mp3",
+        f"{BASE}/mixkit-hip-hop-02-738.mp3",
+    ],
+}
+ 
+TOPIC_MOOD_MAP = {
+    "stoicism":    "meditation",
+    "philosophy":  "ambient",
+    "motivation":  "uplifting",
+    "mindfulness": "meditation",
+    "success":     "uplifting",
+    "nature":      "ambient",
+    "space":       "cinematic",
+    "technology":  "cinematic",
+    "fitness":     "energetic",
+    "wisdom":      "meditation",
+    "life":        "ambient",
 }
  
  
 class AudioFetcher:
     def __init__(self):
-        self.pixabay_key = os.environ.get("PIXABAY_API_KEY")
+        pass  # No API key needed
  
     async def fetch(self, topic: str, post_type: str = "reel") -> Path:
-        query = self._get_query(topic)
-        cache_key = hashlib.md5(f"{topic}{query}".encode()).hexdigest()[:8]
+        mood = self._get_mood(topic)
+        tracks = CC0_TRACKS.get(mood, CC0_TRACKS["ambient"])
+        shuffled = random.sample(tracks, len(tracks))
  
-        # Check cache
-        cached = list(ASSETS_DIR.glob(f"{cache_key}_*.mp3"))
-        if cached:
-            log.info(f"Audio cache hit: {cached[0]}")
-            return cached[0]
+        for url in shuffled:
+            url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+            cached = ASSETS_DIR / f"{url_hash}.mp3"
  
-        if not self.pixabay_key:
-            log.warning("PIXABAY_API_KEY not set — using silent fallback.")
-            return self._generate_silent(post_type)
+            if cached.exists():
+                log.info(f"Audio cache hit: {cached}")
+                return cached
  
-        # Try full query first, then fallback to single word
-        queries_to_try = [query, query.split()[0]]
-        for q in queries_to_try:
             try:
-                path = await self._fetch_pixabay(q, cache_key)
-                return path
+                log.info(f"Downloading [{mood}]: {url.split('/')[-1]}")
+                async with httpx.AsyncClient(
+                    timeout=60.0, follow_redirects=True
+                ) as client:
+                    r = await client.get(url)
+                    if r.status_code == 200 and len(r.content) > 10_000:
+                        cached.write_bytes(r.content)
+                        log.info(
+                            f"Audio saved: {cached} ({len(r.content)//1024}KB)"
+                        )
+                        return cached
+                    log.warning(
+                        f"Bad response: HTTP {r.status_code} "
+                        f"size={len(r.content)}"
+                    )
             except Exception as e:
-                log.warning(f"Pixabay query '{q}' failed: {e}")
+                log.warning(f"Download failed: {e}")
  
-        log.info("All Pixabay queries failed. Generating silent fallback.")
+        log.info("All audio downloads failed. Generating silent fallback.")
         return self._generate_silent(post_type)
  
-    async def _fetch_pixabay(self, query: str, cache_key: str) -> Path:
-        log.info(f"Searching Pixabay music: query='{query}'")
- 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(PIXABAY_API, params={
-                "key": self.pixabay_key,
-                "q": query,
-                "media_type": "music",
-                "category": "music",
-                "per_page": 20,
-                "safesearch": "true",
-                "order": "popular",
-            })
- 
-        log.info(f"Pixabay response: HTTP {r.status_code}")
-        if r.status_code != 200:
-            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
- 
-        data = r.json()
-        hits = data.get("hits", [])
-        log.info(f"Pixabay returned {len(hits)} results for '{query}'")
- 
-        if not hits:
-            raise RuntimeError(f"No results for query='{query}'")
- 
-        # Pick a random track
-        track = random.choice(hits)
-        track_id = track.get("id", "unknown")
- 
-        # Extract audio URL (Pixabay music preview)
-        audio_url = track.get("previewURL")
-
-        if not audio_url:
-            log.warning(f"Track {track_id} keys: {list(track.keys())}")
-            raise RuntimeError(f"No audio preview URL in track {track_id}")
- 
-        log.info(f"Downloading track id={track_id}: {str(audio_url)[:80]}")
- 
-        output_path = ASSETS_DIR / f"{cache_key}_{track_id}.mp3"
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            r = await client.get(audio_url)
-            if r.status_code != 200:
-                raise RuntimeError(f"Download HTTP {r.status_code}")
-            if len(r.content) < 10_000:
-                raise RuntimeError(f"File too small: {len(r.content)} bytes")
- 
-        output_path.write_bytes(r.content)
-        log.info(f"Audio saved: {output_path} ({len(r.content)//1024}KB)")
-        return output_path
- 
-    def _get_query(self, topic: str) -> str:
+    def _get_mood(self, topic: str) -> str:
         topic_lower = topic.lower()
-        for keyword, query in TOPIC_QUERY_MAP.items():
+        for keyword, mood in TOPIC_MOOD_MAP.items():
             if keyword in topic_lower:
-                return query
-        return "ambient instrumental calm"
+                return mood
+        return "ambient"
  
     def _generate_silent(self, post_type: str) -> Path:
         duration = AUDIO_DURATION.get(post_type, 30)
