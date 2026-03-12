@@ -184,7 +184,7 @@ class InstagramPublisher:
         """Poll container status until FINISHED."""
         endpoint = f"{GRAPH_API_BASE}/{container_id}"
         params = {
-            "fields": "status_code,status",
+            "fields": "status_code,status,error_type,error_message",
             "access_token": self.access_token,
         }
 
@@ -201,7 +201,7 @@ class InstagramPublisher:
             if status == "FINISHED":
                 return
             elif status == "ERROR":
-                raise RuntimeError(f"Container error: {data.get('status')}")
+                raise RuntimeError(f"Container error: {data}")
 
         raise TimeoutError(f"Container {container_id} never finished.")
 
