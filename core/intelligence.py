@@ -30,7 +30,7 @@ GENERATION_CONFIG = {
 CONTENT_PROMPT = """You are a viral Instagram content creator.
 
 Rules you MUST follow exactly — do NOT mention them in the output:
-- Return **ONLY** valid JSON — nothing else.
+- Return ONLY valid JSON — nothing else.
 - NO explanation, NO preamble, NO markdown, NO ``` fences, NO comments, NO extra text.
 - Do NOT repeat the instructions or philosophy.
 - Do NOT add any text before or after the JSON object.
@@ -54,10 +54,10 @@ Return exactly this JSON structure and nothing else:
 }}
 
 Constraints (apply silently):
-- hook: max 10 words — this is the **only** text that appears on the video
-- image_prompt: evocative, painterly or photorealistic, no clichés, no text overlays
-- hashtags: 5–6 niche + 1 broad, all lowercase with # prefix
-- color_scheme: colors must match the emotional tone of the topic
+- hook: max 10 words — this is the only text that appears on the video
+- image_prompt: evocative, painterly or photorealistic
+- hashtags: 5–6 niche + 1 broad
+- color_scheme: colors must match the emotional tone
 """
 
 
@@ -82,8 +82,10 @@ class IntelligenceEngine:
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as e:
-            log.error(f"JSON parse failed. Raw response:\n{raw[:400]}")
+            log.error(f"JSON parse failed:\n{raw[:400]}")
             raise ValueError(f"Gemini returned invalid JSON: {e}")
+
+        data = self._normalize_schema(data)
 
         color_scheme = data.get("color_scheme", {
             "primary": "#FFFFFF",
@@ -93,7 +95,7 @@ class IntelligenceEngine:
 
         text_layers = self._build_text_layers(
             hook=data["hook"],
-            color_scheme=color_scheme,
+            color_scheme=color_scheme
         )
 
         hashtags_list = data.get("hashtags", [])
@@ -113,9 +115,6 @@ class IntelligenceEngine:
         }
 
     async def _generate_with_retry(self, prompt: str) -> str:
-        """
-        Generate Gemini content with automatic retries if response is truncated.
-        """
         for attempt in range(3):
             try:
                 response = await asyncio.to_thread(
@@ -130,18 +129,16 @@ class IntelligenceEngine:
                     )
                 )
 
-                raw = response.text.strip()
+                raw = response.candidates[0].content.parts[0].text.strip()
 
-                raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE | re.IGNORECASE)
-                raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE | re.IGNORECASE)
+                raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+                raw = re.sub(r"\s*```$", "", raw)
 
-                if raw.count("{") and raw.count("}"):
+                if raw:
                     return raw
 
-                raise ValueError("Response appears truncated")
-
             except Exception as e:
-                log.warning(f"Gemini generation attempt {attempt + 1} failed: {e}")
+                log.warning(f"Gemini generation attempt {attempt+1} failed: {e}")
 
                 if attempt == 2:
                     raise
@@ -149,27 +146,42 @@ class IntelligenceEngine:
         raise RuntimeError("Gemini generation failed after retries")
 
     def _extract_json(self, text: str) -> str:
-        """
-        Extract the first valid JSON object from text.
-        Prevents prefix/suffix garbage from breaking parsing.
-        """
         start = text.find("{")
         end = text.rfind("}")
 
         if start == -1 or end == -1:
-            raise ValueError("No JSON object detected in response")
+            raise ValueError("No JSON detected in Gemini response")
 
-        return text[start:end + 1]
+        return text[start:end+1]
 
-    def _build_text_layers(
-        self,
-        hook: str,
-        color_scheme: dict,
-    ) -> list[dict]:
+    def _normalize_schema(self, data: dict) -> dict:
         """
-        Returns ONE centered text layer containing only the hook/quote.
-        Word-wrap + dynamic font size to fit safely in 1080 px width.
+        Fix common Gemini schema deviations.
         """
+
+        hashtags = data.get("hashtags", [])
+        normalized_tags = []
+
+        for tag in hashtags:
+            tag = tag.lower()
+            if not tag.startswith("#"):
+                tag = "#" + tag
+            normalized_tags.append(tag)
+
+        data["hashtags"] = normalized_tags
+
+        color_scheme = data.get("color_scheme")
+
+        if not isinstance(color_scheme, dict):
+            data["color_scheme"] = {
+                "primary": "#FFFFFF",
+                "accent": "#FFD700",
+                "shadow": "#000000",
+            }
+
+        return data
+
+    def _build_text_layers(self, hook: str, color_scheme: dict) -> list[dict]:
 
         accent = color_scheme.get("accent", "#FFD700")
         shadow = color_scheme.get("shadow", "#000000")
