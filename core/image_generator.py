@@ -1,12 +1,17 @@
 """
 Image generation via Hugging Face Inference Router.
-Model: black-forest-labs/FLUX.1-dev  (free tier, high quality)
+Model: black-forest-labs/FLUX.1-schnell
 
-Endpoint: https://router.huggingface.co  ← NOT api-inference.huggingface.co (deprecated)
-Auth:     HF_TOKEN env var (huggingface.co → Settings → Tokens → read + inference)
+CORRECT URL: https://router.huggingface.co/hf-inference/models/{model}
+             NO /v1/text-to-image suffix — that returns 404
+             NO /v1/text-to-image path — only base model URL works
 
-Aspect ratio: prompt-injected (9:16 for reels, 4:5 for feed)
-Fallback: FFmpeg solid-color gradient.
+Auth: HF_TOKEN env var
+      Token needs "Make calls to Inference Providers" permission enabled at
+      huggingface.co/settings/tokens
+
+Response: JPEG bytes (JFIF header \xff\xd8\xff\xe0)
+Fallback: FFmpeg solid-color gradient
 """
 
 import asyncio
@@ -23,10 +28,11 @@ log = logging.getLogger("oracle.image")
 ASSETS_DIR = Path("assets/images")
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-HF_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-dev/v1/text-to-image"
+# CORRECT — confirmed working March 2026
+HF_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 
 DIMENSIONS   = {"reel": (1080, 1920), "feed": (1080, 1350)}
-ASPECT_HINTS = {"reel": "portrait 9:16 vertical composition", "feed": "portrait 4:5 vertical composition"}
+ASPECT_HINTS = {"reel": "portrait 9:16 vertical", "feed": "portrait 4:5 vertical"}
 
 TOPIC_COLORS = {
     "stoic": "0D1B2A", "philosoph": "1A1A2E", "motivat": "1A0A2E",
@@ -45,7 +51,7 @@ class ImageGenerator:
     async def generate(self, prompt: str, post_type: str = "reel") -> Path:
         w, h = DIMENSIONS.get(post_type, (1080, 1920))
         slug = hashlib.md5(f"{prompt}{post_type}".encode()).hexdigest()[:12]
-        out  = ASSETS_DIR / f"{slug}.png"
+        out  = ASSETS_DIR / f"{slug}.jpg"
 
         if out.exists():
             log.info(f"Image cache hit: {out}")
@@ -68,7 +74,6 @@ class ImageGenerator:
                 last_exc = e
                 err_str = str(e)
                 if "503" in err_str or "loading" in err_str.lower():
-                    # Model is cold-starting — wait and retry
                     log.warning(f"Model loading, waiting 20s (attempt {attempt + 1}/3)")
                     await asyncio.sleep(20)
                 elif "429" in err_str:
@@ -80,14 +85,14 @@ class ImageGenerator:
         raise last_exc
 
     async def _call(self, prompt: str, post_type: str, out: Path, w: int, h: int) -> Path:
-        aspect_hint = ASPECT_HINTS.get(post_type, "portrait 9:16 vertical composition")
+        aspect_hint = ASPECT_HINTS.get(post_type, "portrait 9:16 vertical")
         enhanced = (
             f"{prompt}. {aspect_hint}. "
             "Cinematic dramatic lighting, dark moody atmosphere, "
             "ultra high quality, professional photography, Instagram-ready. "
             "No text or watermarks."
         )
-        log.info(f"Calling FLUX.1-dev via HF router | post_type={post_type}")
+        log.info(f"Calling FLUX.1-schnell | post_type={post_type}")
 
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
@@ -96,21 +101,15 @@ class ImageGenerator:
                     "Authorization": f"Bearer {self.hf_token}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "inputs": enhanced,
-                    "parameters": {
-                        "width": w,
-                        "height": h,
-                    }
-                },
+                json={"inputs": enhanced},
             )
 
         if response.status_code != 200:
             raise RuntimeError(f"HF {response.status_code}: {response.text[:200]}")
 
-        content_type = response.headers.get("content-type", "")
-        if "image" not in content_type:
-            raise RuntimeError(f"Expected image, got {content_type}: {response.text[:200]}")
+        # Verify it's actually image bytes not an error JSON
+        if response.content[:2] not in (b'\xff\xd8', b'\x89P'):  # JPEG or PNG magic bytes
+            raise RuntimeError(f"Response is not an image: {response.content[:100]}")
 
         out.write_bytes(response.content)
         log.info(f"Image saved: {out} ({len(response.content) // 1024} KB)")
@@ -120,6 +119,8 @@ class ImageGenerator:
         color = next(
             (c for kw, c in TOPIC_COLORS.items() if kw in prompt.lower()), "0D1B2A"
         )
+        # Gradient fallback saves as PNG
+        out = out.with_suffix(".png")
         subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi",
              "-i", f"color=c=0x{color}:s={w}x{h}",
