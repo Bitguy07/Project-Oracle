@@ -14,11 +14,12 @@ import logging
 import os
 import re
 import textwrap
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 log = logging.getLogger("oracle.intelligence")
 
-MODEL_NAME = "gemini-1.5-flash"           # or "gemini-2.0-flash" / "gemini-2.5-flash" if available & stable
+MODEL_NAME = "gemini-2.5-flash"           # Updated to stable 2026 model; alternatives: "gemini-2.0-flash" / "gemini-3.0-flash" if available
 # MODEL_NAME = "gemini-2.5-flash-lite"    # ← switch back only if this version becomes reliable again
 
 GENERATION_CONFIG = {
@@ -65,18 +66,20 @@ class IntelligenceEngine:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise EnvironmentError("GEMINI_API_KEY not set.")
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(
-            MODEL_NAME,
-            generation_config=GENERATION_CONFIG,
-        )
+        # New SDK auto-loads from env; no explicit configure needed
+        self.client = genai.Client()
 
     async def generate_content(self, topic: str, post_type: str = "reel") -> dict:
         prompt = CONTENT_PROMPT.format(topic=topic, post_type=post_type)
         log.info(f"Generating content for topic='{topic}' ({post_type})")
 
         try:
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(**GENERATION_CONFIG)
+            )
             raw = response.text.strip()
         except Exception as e:
             log.error(f"Gemini API call failed: {e}")
