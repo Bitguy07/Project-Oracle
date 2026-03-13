@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import json as json_lib
 
 log = logging.getLogger("oracle.publisher")
 
@@ -166,29 +167,34 @@ class InstagramPublisher:
     # Step 5 — Delete temp file from GitHub
     # ─────────────────────────────────────────────────────────────────────────
     async def _github_delete(self):
-        if not self._temp_path or not self._temp_sha:
-            return
-        try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.delete(
-                    f"{GH_API}/repos/{REPO}/contents/{self._temp_path}",
-                    headers={
-                        "Authorization": f"token {self.gh_token}",
-                        "Accept":        "application/vnd.github.v3+json",
-                        "User-Agent":    "ProjectOracle/1.0",
-                    },
-                    json={
-                        "message": "delete temp upload",
-                        "sha":     self._temp_sha,
-                        "branch":  BRANCH,
-                    },
-                )
-            if r.status_code == 200:
-                log.info(f"Deleted temp file: {self._temp_path}")
-            else:
-                log.warning(f"Delete returned {r.status_code}: {r.text[:120]}")
-        except Exception as e:
-            log.warning(f"Could not delete temp file: {e}")
+            if not self._temp_path or not self._temp_sha:
+                return
+            try:
+                import json as json_lib
+                headers = {
+                    "Authorization": f"token {self.gh_token}",
+                    "Accept":        "application/vnd.github.v3+json",
+                    "User-Agent":    "ProjectOracle/1.0",
+                    "Content-Type":  "application/json",
+                }
+                body = json_lib.dumps({
+                    "message": "delete temp upload",
+                    "sha":     self._temp_sha,
+                    "branch":  BRANCH,
+                }).encode()
+
+                async with httpx.AsyncClient(timeout=30) as c:
+                    r = await c.delete(
+                        f"{GH_API}/repos/{REPO}/contents/{self._temp_path}",
+                        headers=headers,
+                        content=body,
+                    )
+                if r.status_code == 200:
+                    log.info(f"Deleted temp file: {self._temp_path}")
+                else:
+                    log.warning(f"Delete returned {r.status_code}: {r.text[:120]}")
+            except Exception as e:
+                log.warning(f"Could not delete temp file: {e}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Helper
