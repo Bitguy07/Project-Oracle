@@ -1,148 +1,106 @@
 """
-core/image_generator.py
-Image generation using Gemini 2.5 Flash Image API.
- 
-Model: gemini-2.5-flash-image
-Free tier: 500 images/day — uses your existing GEMINI_API_KEY, no new signup.
-Aspect ratio: 9:16 for reels, 4:5 for feed.
-Falls back to local gradient if API fails.
+
+Uses Google Imagen 3 via the Gemini API (generate_images, NOT generate_content).
+Model:  imagen-3.0-generate-001        (stable, high quality, free tier India ✓)
+        imagen-3.0-fast-generate-001   (faster fallback)
+
+Free tier: ~50 images/day via Google AI Studio key. No credit card needed.
+Aspect ratio: 9:16 for Reels, 4:5 for Feed.
+Falls back to FFmpeg gradient if quota exceeded or API unavailable.
 """
- 
+
 import asyncio
-import base64
 import hashlib
 import logging
 import os
 import subprocess
 from pathlib import Path
- 
-from google import genai
-from google.genai import types
- 
+
 log = logging.getLogger("oracle.image")
- 
+
 ASSETS_DIR = Path("assets/images")
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
- 
-DIMENSIONS = {
-    "reel": (1080, 1920),
-    "feed": (1080, 1350),
+
+DIMENSIONS   = {"reel": (1080, 1920), "feed": (1080, 1350)}
+ASPECT_RATIOS = {"reel": "9:16",      "feed": "4:5"}
+
+IMAGEN_MODELS = [
+    "imagen-3.0-generate-001",
+    "imagen-3.0-fast-generate-001",
+]
+
+TOPIC_COLORS = {
+    "stoic": "0D1B2A", "philosoph": "1A1A2E", "motivat": "1A0A2E",
+    "mindful": "0D2818", "success": "0A1628", "nature": "0D2010",
+    "space": "030418",  "tech": "0D1B2A",    "fitness": "1A0808",
+    "wisdom": "1A1408", "life": "0D1020",     "love": "1A0818",
 }
- 
-ASPECT_RATIOS = {
-    "reel": "9:16",
-    "feed": "4:5",
-}
- 
- 
+
+
 class ImageGenerator:
     def __init__(self):
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
+        self._api_key = os.environ.get("GEMINI_API_KEY")
+        if not self._api_key:
             raise EnvironmentError("GEMINI_API_KEY not set.")
-        self.client = genai.Client(api_key=api_key)
- 
+        self._client = None
+
+    def _client_obj(self):
+        if self._client is None:
+            from google import genai
+            self._client = genai.Client(api_key=self._api_key)
+        return self._client
+
     async def generate(self, prompt: str, post_type: str = "reel") -> Path:
-        width, height = DIMENSIONS.get(post_type, (1080, 1920))
+        w, h         = DIMENSIONS.get(post_type, (1080, 1920))
         aspect_ratio = ASPECT_RATIOS.get(post_type, "9:16")
- 
-        slug = hashlib.md5(f"{prompt}{post_type}".encode()).hexdigest()[:12]
-        output_path = ASSETS_DIR / f"{slug}.png"
- 
-        if output_path.exists():
-            log.info(f"Image cache hit: {output_path}")
-            return output_path
- 
-        # ── Try Gemini 2.5 Flash Image ─────────────────────────────────────
-        try:
-            path = await self._gemini_image(prompt, aspect_ratio, output_path)
-            log.info(f"Gemini image succeeded: {path}")
-            return path
-        except Exception as e:
-            log.warning(f"Gemini image failed: {e}")
- 
-        # ── Fallback: local gradient ───────────────────────────────────────
-        log.warning("Gemini image failed. Generating local gradient background.")
-        return self._generate_gradient(width, height, output_path, prompt)
- 
-    async def _gemini_image(
-        self,
-        prompt: str,
-        aspect_ratio: str,
-        output_path: Path,
-    ) -> Path:
-        enhanced_prompt = (
-            f"{prompt}. "
-            f"Cinematic lighting, dramatic atmosphere, "
-            f"professional photography, dark moody aesthetic, "
-            f"ultra high quality, Instagram-ready visual."
+        slug         = hashlib.md5(f"{prompt}{post_type}".encode()).hexdigest()[:12]
+        out          = ASSETS_DIR / f"{slug}.png"
+
+        if out.exists():
+            log.info(f"Image cache hit: {out}")
+            return out
+
+        for model in IMAGEN_MODELS:
+            try:
+                return await self._imagen(prompt, aspect_ratio, out, model)
+            except Exception as e:
+                log.warning(f"Imagen [{model}] failed: {e}")
+
+        log.warning("All image APIs failed — using gradient fallback.")
+        return self._gradient(w, h, out, prompt)
+
+    async def _imagen(self, prompt: str, aspect_ratio: str, out: Path, model: str) -> Path:
+        from google.genai import types
+        enhanced = (
+            f"{prompt}. Cinematic dramatic lighting, dark moody atmosphere, "
+            "ultra high quality, professional photography, Instagram-ready."
         )
- 
-        log.info(f"Calling gemini-2.0-flash-exp-image-generation, ratio={aspect_ratio}")
- 
-        response = await asyncio.to_thread(
-            self.client.models.generate_content,
-            model="gemini-2.0-flash-exp-image-generation",
-            contents=enhanced_prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio,
-                ),
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    disable=True
-                ),
+        log.info(f"Calling {model}, ratio={aspect_ratio}")
+        client = self._client_obj()
+        resp = await asyncio.to_thread(
+            client.models.generate_images,
+            model=model,
+            prompt=enhanced,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+                safety_filter_level="block_only_high",
+                person_generation="dont_allow",
             ),
         )
- 
-        for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
-                image_data = part.inline_data.data
-                if isinstance(image_data, str):
-                    image_data = base64.b64decode(image_data)
-                output_path.write_bytes(image_data)
-                log.info(f"Image saved: {output_path} ({len(image_data)//1024}KB)")
-                return output_path
- 
-        raise RuntimeError("No image data in Gemini response")
- 
-    def _generate_gradient(
-        self,
-        width: int,
-        height: int,
-        output_path: Path,
-        prompt: str,
-    ) -> Path:
-        color = self._pick_color(prompt)
-        cmd = [
+        if not resp.generated_images:
+            raise RuntimeError("No images returned")
+        img_bytes = resp.generated_images[0].image.image_bytes
+        out.write_bytes(img_bytes)
+        log.info(f"Image saved: {out} ({len(img_bytes)//1024} KB)")
+        return out
+
+    def _gradient(self, w: int, h: int, out: Path, prompt: str) -> Path:
+        color = next((c for kw, c in TOPIC_COLORS.items() if kw in prompt.lower()), "0D1B2A")
+        subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"color=c=0x{color}:s={width}x{height}",
-            "-frames:v", "1",
-            str(output_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi",
-                "-i", f"color=c=black:s={width}x{height}",
-                "-frames:v", "1", str(output_path),
-            ], capture_output=True)
-        log.info(f"Gradient saved: {output_path}")
-        return output_path
- 
-    @staticmethod
-    def _pick_color(prompt: str) -> str:
-        colors = {
-            "stoic": "0D1B2A", "philosoph": "1A1A2E",
-            "motivat": "1A0A2E", "mindful": "0D2818",
-            "success": "0A1628", "nature": "0D2010",
-            "space": "030418", "tech": "0D1B2A",
-            "fitness": "1A0808", "love": "1A0818",
-            "wisdom": "1A1408", "life": "0D1020",
-        }
-        p = prompt.lower()
-        for kw, c in colors.items():
-            if kw in p:
-                return c
-        return "0D1B2A"
- 
+            "-i", f"color=c=0x{color}:s={w}x{h}",
+            "-frames:v", "1", str(out),
+        ], capture_output=True)
+        log.info(f"Gradient saved: {out}")
+        return out
