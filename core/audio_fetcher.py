@@ -1,6 +1,4 @@
 """
-core/audio_fetcher.py
-
 Strategy (in order of reliability):
   1. BUNDLED LOCAL MP3s — files committed to repo at assets/bundled_audio/
      Zero failure. No network. Works forever. Add once, forget it.

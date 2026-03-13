@@ -1,144 +1,106 @@
 """
+Model: gemini-2.5-flash-image  (stable, FREE tier, works in India, 500/day)
+API:   client.models.generate_content() with response_modalities=["IMAGE"]
+       DO NOT use generate_images() — that's Imagen 3 (paid only, 404s)
 
-Strategy (in order of reliability):
-  1. BUNDLED LOCAL MP3s — files committed to repo at assets/bundled_audio/
-     Zero failure. No network. Works forever. Add once, forget it.
-     Source: https://pixabay.com/music/ — free commercial use, no attribution needed.
-
-  2. PIXABAY CDN — direct CDN MP3 URLs, no API key, no auth.
-
-  3. SILENT FALLBACK — FFmpeg generated silence.
-
-ONE-TIME SETUP (do this once locally):
-  mkdir -p assets/bundled_audio
-  # Download 2-3 tracks from https://pixabay.com/music/search/ambient/
-  # Save them as: assets/bundled_audio/meditation_1.mp3, ambient_1.mp3, etc.
-  git add assets/bundled_audio/
-  git commit -m "Add bundled background music"
-  git push
-  # Done — GitHub Actions will always have them available
+Aspect ratio: 9:16 for Reels, 4:5 for Feed.
+Fallback: FFmpeg solid color gradient.
 """
 
+import asyncio
 import hashlib
 import logging
+import os
 import subprocess
 from pathlib import Path
 
-import httpx
+from google import genai
+from google.genai import types
 
-log = logging.getLogger("oracle.audio")
+log = logging.getLogger("oracle.image")
 
-ASSETS_DIR  = Path("assets/audio")
-BUNDLED_DIR = Path("assets/bundled_audio")
+ASSETS_DIR = Path("assets/images")
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-BUNDLED_DIR.mkdir(parents=True, exist_ok=True)
 
-VIDEO_DURATION = 30
+DIMENSIONS    = {"reel": (1080, 1920), "feed": (1080, 1350)}
+ASPECT_RATIOS = {"reel": "9:16",       "feed": "4:5"}
 
-TOPIC_MOOD = {
-    "stoicism": "meditation", "philosophy": "ambient",
-    "motivation": "uplifting", "mindfulness": "meditation",
-    "success": "uplifting", "nature": "ambient",
-    "space": "cinematic", "technology": "cinematic",
-    "fitness": "energetic", "wisdom": "meditation",
-    "life": "ambient", "love": "ambient",
-}
+MODELS = [
+    "gemini-2.5-flash-image",          # stable, free tier ✓
+    "gemini-3.1-flash-image-preview",  # newest Nano Banana 2 (may need paid)
+]
 
-# Pixabay CDN direct MP3s — no API key needed, real audio files
-PIXABAY_CDN = {
-    "meditation": [
-        "https://cdn.pixabay.com/audio/2022/10/16/audio_38e54f1849.mp3",
-        "https://cdn.pixabay.com/audio/2022/03/15/audio_1e5c87d0fd.mp3",
-    ],
-    "ambient": [
-        "https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3",
-        "https://cdn.pixabay.com/audio/2022/01/18/audio_d0c6ff1bab.mp3",
-    ],
-    "uplifting": [
-        "https://cdn.pixabay.com/audio/2023/01/25/audio_a511c54232.mp3",
-        "https://cdn.pixabay.com/audio/2022/08/02/audio_884fe92c21.mp3",
-    ],
-    "cinematic": [
-        "https://cdn.pixabay.com/audio/2022/10/25/audio_946b3fd28a.mp3",
-        "https://cdn.pixabay.com/audio/2023/03/09/audio_c8c8a73467.mp3",
-    ],
-    "energetic": [
-        "https://cdn.pixabay.com/audio/2022/09/08/audio_23cd6b8714.mp3",
-        "https://cdn.pixabay.com/audio/2022/11/22/audio_ea70ad08ca.mp3",
-    ],
+TOPIC_COLORS = {
+    "stoic": "0D1B2A", "philosoph": "1A1A2E", "motivat": "1A0A2E",
+    "mindful": "0D2818", "success": "0A1628", "nature": "0D2010",
+    "space": "030418",  "tech": "0D1B2A",    "fitness": "1A0808",
+    "wisdom": "1A1408", "life": "0D1020",     "love": "1A0818",
 }
 
 
-class AudioFetcher:
+class ImageGenerator:
     def __init__(self):
-        pass
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise EnvironmentError("GEMINI_API_KEY not set.")
+        self.client = genai.Client(api_key=api_key)
 
-    async def fetch(self, topic: str, post_type: str = "reel") -> Path:
-        mood = self._get_mood(topic)
+    async def generate(self, prompt: str, post_type: str = "reel") -> Path:
+        w, h         = DIMENSIONS.get(post_type, (1080, 1920))
+        aspect_ratio = ASPECT_RATIOS.get(post_type, "9:16")
+        slug         = hashlib.md5(f"{prompt}{post_type}".encode()).hexdigest()[:12]
+        out          = ASSETS_DIR / f"{slug}.png"
 
-        # 1. Bundled local files (most reliable)
-        bundled = self._find_bundled(mood)
-        if bundled:
-            log.info(f"Using bundled audio: {bundled}")
-            return bundled
+        if out.exists():
+            log.info(f"Image cache hit: {out}")
+            return out
 
-        # 2. Pixabay CDN direct URLs
-        for url in PIXABAY_CDN.get(mood, PIXABAY_CDN["ambient"]):
+        for model in MODELS:
             try:
-                path = await self._download(url)
-                if path:
-                    return path
+                return await self._call(prompt, aspect_ratio, out, model)
             except Exception as e:
-                log.warning(f"CDN error: {e}")
+                log.warning(f"Imagen [{model}] failed: {e}")
 
-        # 3. Silent fallback
-        log.info("All audio sources failed — silent fallback.")
-        return self._make_silent()
+        log.warning("All image APIs failed — using gradient fallback.")
+        return self._gradient(w, h, out, prompt)
 
-    def _find_bundled(self, mood: str) -> Path | None:
-        # Try mood-specific first
-        for f in BUNDLED_DIR.glob(f"{mood}*.mp3"):
-            if f.stat().st_size > 50_000:
-                return f
-        # Any valid MP3
-        for f in BUNDLED_DIR.glob("*.mp3"):
-            if f.stat().st_size > 50_000:
-                return f
-        return None
+    async def _call(self, prompt: str, aspect_ratio: str, out: Path, model: str) -> Path:
+        enhanced = (
+            f"{prompt}. "
+            "Cinematic dramatic lighting, dark moody atmosphere, "
+            "ultra high quality, professional photography, Instagram-ready."
+        )
+        log.info(f"Calling {model}, ratio={aspect_ratio}")
 
-    async def _download(self, url: str) -> Path | None:
-        cached = ASSETS_DIR / f"{hashlib.md5(url.encode()).hexdigest()[:10]}.mp3"
-        if cached.exists() and cached.stat().st_size > 10_000:
-            log.info(f"Cache hit: {cached}")
-            return cached
+        # CORRECT API: generate_content with IMAGE modality
+        response = await asyncio.to_thread(
+            self.client.models.generate_content,
+            model=model,
+            contents=enhanced,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(
+                    aspect_ratio=aspect_ratio,
+                ),
+            ),
+        )
 
-        log.info(f"Downloading CDN: {url[-40:]}")
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-            r = await c.get(url)
+        for part in response.parts:
+            if part.inline_data is not None:
+                out.write_bytes(part.inline_data.data)
+                log.info(f"Image saved: {out} ({len(part.inline_data.data)//1024} KB)")
+                return out
 
-        ct = r.headers.get("content-type", "")
-        if r.status_code == 200 and "audio" in ct and len(r.content) > 10_000:
-            cached.write_bytes(r.content)
-            log.info(f"Saved: {cached} ({len(r.content)//1024} KB)")
-            return cached
+        raise RuntimeError(f"No image in response from {model}")
 
-        log.warning(f"Failed: HTTP {r.status_code} ct={ct} size={len(r.content)}")
-        return None
-
-    def _get_mood(self, topic: str) -> str:
-        t = topic.lower()
-        for kw, mood in TOPIC_MOOD.items():
-            if kw in t:
-                return mood
-        return "ambient"
-
-    def _make_silent(self) -> Path:
-        out = ASSETS_DIR / "silent_30s.mp3"
-        if not out.exists():
-            subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi",
-                "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-                "-t", str(VIDEO_DURATION),
-                "-q:a", "9", "-acodec", "libmp3lame", str(out),
-            ], capture_output=True)
+    def _gradient(self, w: int, h: int, out: Path, prompt: str) -> Path:
+        color = next(
+            (c for kw, c in TOPIC_COLORS.items() if kw in prompt.lower()), "0D1B2A"
+        )
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"color=c=0x{color}:s={w}x{h}",
+            "-frames:v", "1", str(out),
+        ], capture_output=True)
+        log.info(f"Gradient saved: {out}")
         return out
