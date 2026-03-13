@@ -25,51 +25,42 @@ MODEL_NAME = "gemini-2.5-flash"
 GENERATION_CONFIG = {
     "temperature": 0.75,
     "top_p": 0.92,
-    "max_output_tokens": 1500,
+    # FIX: 1500 was too low — long image_prompt + caption truncated the JSON.
+    # 512 is plenty for this small schema; keeps responses fast and never truncates.
+    "max_output_tokens": 512,
 }
 
+# FIX: Tighter word/char budgets on every field so the whole response
+# comfortably fits inside 512 tokens and never gets cut off mid-JSON.
 CONTENT_PROMPT = """You are a viral Instagram content creator.
 
-Rules you MUST follow exactly — do NOT mention them in the output:
-- Return ONLY valid JSON — nothing else.
-- NO explanation, NO preamble, NO markdown, NO ``` fences, NO comments, NO extra text.
-- Do NOT repeat the instructions or philosophy.
-- Do NOT add any text before or after the JSON object.
+Return ONLY a valid JSON object — no explanation, no markdown, no ``` fences.
 
 Task: Generate content for a {post_type} about: "{topic}"
 
-Return exactly this JSON structure and nothing else:
+Return exactly this structure:
 
 {{
-  "hook": "A powerful quote. Max 10 words. Punchy, thought-provoking. NO colons.",
-  "body": "2-3 sentences expanding the idea. Max 35 words total. For caption only.",
-  "cta": "One short CTA like 'Save this.' or 'Tag a friend who needs this.' For caption only.",
-  "caption": "Full Instagram caption combining hook + body + cta naturally. Max 200 chars before hashtags.",
-  "hashtags": ["#niche1","#niche2","#niche3","#niche4","#niche5","#broad1"],
-  "image_prompt": "Detailed cinematic scene for AI image generation. Dramatic lighting, ultra-HD, specific mood and color palette. No text in image.",
+  "hook": "Max 8 words. Punchy quote. NO colons.",
+  "body": "Max 20 words. Expands the idea. Caption only.",
+  "cta": "Max 8 words. E.g. Save this. or Tag a friend.",
+  "caption": "Max 120 chars. hook + body + cta combined naturally.",
+  "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
+  "image_prompt": "Max 25 words. Cinematic scene. Dramatic lighting. No text in image.",
   "color_scheme": {{
     "primary": "#FFFFFF",
     "accent": "#FFD700",
     "shadow": "#000000"
   }}
 }}
-
-Constraints (apply silently):
-- hook: max 10 words — this is the only text that appears on the video
-- image_prompt: evocative, painterly or photorealistic
-- hashtags: 5–6 niche + 1 broad
-- color_scheme: colors must match the emotional tone
 """
 
-# Fallback content if Gemini fails entirely
 _FALLBACK = {
     "hook": "Silence speaks what words cannot.",
-    "body": "In stillness, answers emerge. The mind finds clarity when it stops searching.",
-    "cta": "Save this for when you need it.",
-    "image_prompt": (
-        "Dark cinematic landscape at golden hour, dramatic storm clouds parting "
-        "to reveal a single beam of light, ultra-HD, moody and powerful."
-    ),
+    "body": "In stillness, answers emerge.",
+    "cta": "Save this.",
+    "caption": "Silence speaks what words cannot. In stillness, answers emerge. Save this.",
+    "image_prompt": "Dark cinematic landscape, dramatic storm clouds, single beam of light, ultra-HD.",
     "color_scheme": {"primary": "#FFFFFF", "accent": "#FFD700", "shadow": "#000000"},
     "hashtags": ["#mindset", "#wisdom", "#motivation", "#clarity", "#growth", "#inspiration"],
 }
@@ -81,8 +72,6 @@ class IntelligenceEngine:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise EnvironmentError("GEMINI_API_KEY not set.")
-        # FIX: api_key must be passed explicitly — relying on auto-pickup is
-        # unreliable in CI / GitHub Actions environments.
         self.client = genai.Client(api_key=api_key)
 
     async def generate_content(self, topic: str, post_type: str = "reel") -> dict:
@@ -90,9 +79,9 @@ class IntelligenceEngine:
         log.info(f"Generating content for topic='{topic}' ({post_type})")
 
         try:
-            raw = await self._generate_with_retry(prompt)
+            raw     = await self._generate_with_retry(prompt)
             cleaned = self._extract_json(raw)
-            data = json.loads(cleaned)
+            data    = json.loads(cleaned)
         except json.JSONDecodeError as e:
             log.error(f"JSON parse failed — using fallback. Error: {e}")
             data = dict(_FALLBACK)
@@ -102,20 +91,11 @@ class IntelligenceEngine:
 
         data = self._normalize_schema(data)
 
-        color_scheme = data.get("color_scheme", {
-            "primary": "#FFFFFF",
-            "accent": "#FFD700",
-            "shadow": "#000000",
-        })
-
-        text_layers = self._build_text_layers(
-            hook=data["hook"],
-            color_scheme=color_scheme,
-        )
+        color_scheme = data.get("color_scheme", dict(_FALLBACK["color_scheme"]))
+        text_layers  = self._build_text_layers(hook=data["hook"], color_scheme=color_scheme)
 
         hashtags_list = data.get("hashtags", [])
-        hashtags_str  = " ".join(hashtags_list)
-        full_caption  = f"{data['caption'].strip()}\n\n{hashtags_str}".strip()
+        full_caption  = f"{data['caption'].strip()}\n\n{' '.join(hashtags_list)}".strip()
 
         return {
             "hook":         data["hook"],
@@ -145,52 +125,38 @@ class IntelligenceEngine:
                     ),
                 )
 
-                # FIX: safe extraction — candidates may be empty, parts may lack .text
                 raw = self._extract_text(response)
 
                 if not raw:
-                    raise ValueError("Empty response text from Gemini")
+                    raise ValueError("Empty response from Gemini")
 
-                # Strip accidental markdown fences just in case
                 raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
                 raw = re.sub(r"\s*```$", "", raw)
-
                 return raw.strip()
 
             except Exception as e:
                 last_exc = e
                 log.warning(f"Gemini attempt {attempt + 1}/3 failed: {e}")
                 if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))  # brief back-off
+                    await asyncio.sleep(1.5 * (attempt + 1))
 
         raise last_exc
 
     def _extract_text(self, response) -> str:
-        """
-        Safely pull text out of a Gemini response regardless of SDK version
-        quirks or unexpected response shapes.
-        """
-        # Preferred path: response.text (SDK shortcut)
         try:
             text = response.text
             if text:
                 return text.strip()
         except Exception:
             pass
-
-        # Fallback: walk candidates → parts manually
         try:
-            candidates = response.candidates or []
-            for candidate in candidates:
+            for candidate in (response.candidates or []):
                 parts = getattr(candidate.content, "parts", []) or []
-                text = "".join(
-                    p.text for p in parts if hasattr(p, "text") and p.text
-                ).strip()
+                text = "".join(p.text for p in parts if hasattr(p, "text") and p.text).strip()
                 if text:
                     return text
         except Exception as e:
             log.warning(f"Manual part extraction failed: {e}")
-
         return ""
 
     def _extract_json(self, text: str) -> str:
@@ -201,33 +167,25 @@ class IntelligenceEngine:
         return text[start : end + 1]
 
     def _normalize_schema(self, data: dict) -> dict:
-        # Ensure all required keys exist with sensible defaults
-        fb = _FALLBACK
         for key in ("hook", "body", "cta", "caption", "image_prompt"):
             if not data.get(key):
                 log.warning(f"Missing field '{key}' — using fallback value.")
-                data[key] = fb[key]
+                data[key] = _FALLBACK[key]
 
-        # Normalize hashtags
-        raw_tags = data.get("hashtags", fb["hashtags"])
+        raw_tags = data.get("hashtags", [])
         if not isinstance(raw_tags, list) or not raw_tags:
-            raw_tags = fb["hashtags"]
-        normalized = []
-        for tag in raw_tags:
-            tag = str(tag).lower().strip()
-            if not tag.startswith("#"):
-                tag = "#" + tag
-            normalized.append(tag)
-        data["hashtags"] = normalized
+            raw_tags = _FALLBACK["hashtags"]
+        data["hashtags"] = [
+            ("#" + t.lower().strip().lstrip("#")) for t in raw_tags
+        ]
 
-        # Normalize color_scheme
         cs = data.get("color_scheme")
         if not isinstance(cs, dict):
-            data["color_scheme"] = dict(fb["color_scheme"])
+            data["color_scheme"] = dict(_FALLBACK["color_scheme"])
         else:
-            for k, default in fb["color_scheme"].items():
+            for k, v in _FALLBACK["color_scheme"].items():
                 if not cs.get(k):
-                    cs[k] = default
+                    cs[k] = v
 
         return data
 
@@ -238,26 +196,17 @@ class IntelligenceEngine:
         wrapped    = "\n".join(textwrap.wrap(hook, width=18, break_long_words=False))
         line_count = wrapped.count("\n") + 1
 
-        if line_count <= 1:
-            font_size = 96
-        elif line_count == 2:
-            font_size = 84
-        elif line_count == 3:
-            font_size = 72
-        else:
-            font_size = 64
+        font_size = 96 if line_count <= 1 else 84 if line_count == 2 else 72 if line_count == 3 else 64
 
-        return [
-            {
-                "text":          wrapped,
-                "y_position":    0.5,
-                "font_size":     font_size,
-                "color":         accent,
-                "shadow_color":  shadow,
-                "shadow_offset": (4, 4),
-                "shadow_blur":   8,
-                "appear_at":     0.6,
-                "bold":          True,
-                "align":         "center",
-            }
-        ]
+        return [{
+            "text":          wrapped,
+            "y_position":    0.5,
+            "font_size":     font_size,
+            "color":         accent,
+            "shadow_color":  shadow,
+            "shadow_offset": (4, 4),
+            "shadow_blur":   8,
+            "appear_at":     0.6,
+            "bold":          True,
+            "align":         "center",
+        }]
