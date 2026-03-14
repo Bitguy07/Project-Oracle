@@ -1,7 +1,17 @@
 """
 core/state_manager.py
 Persistence via GitHub Gist (primary) or local config.json (fallback).
-Adds: topic_history for autonomous deduplication, pending_posts, review_mode.
+
+GIST FILE: always reads/writes "oracle_state.json" specifically.
+TOKEN:     uses GIST_TOKEN first (has gist + repo scope), falls back to GITHUB_TOKEN.
+
+Schema fields:
+  quota         — daily API usage counters
+  posts         — last 50 published posts (history + dedup)
+  topic_queue   — manual topics queued for next cron run
+  topic_history — last 30 topic strings for autonomous dedup
+  pending_posts — videos awaiting /done or /no approval
+  review_mode   — "auto" or "review"
 """
 
 import json
@@ -17,6 +27,8 @@ import requests
 
 log = logging.getLogger("oracle.state")
 
+GIST_FILENAME = "oracle_state.json"
+
 DEFAULT_STATE = {
     "quota": {
         "gemini_daily_limit":     1500,
@@ -25,12 +37,12 @@ DEFAULT_STATE = {
         "image_daily_limit":      50,
         "reset_date":             "",
     },
-    "posts":        [],        # last 50 posts
-    "topic_queue":  [],        # [{id, topic, type, added_at}]
-    "topic_history":[],        # last 30 topic strings for deduplication
-    "pending_posts":[],        # videos awaiting /done or /no
-    "review_mode":  "auto",    # "auto" or "review"
-    "last_updated": "",
+    "posts":         [],   # last 50 published posts
+    "topic_queue":   [],   # [{id, topic, type, added_at}]
+    "topic_history": [],   # last 30 topic strings for autonomous dedup
+    "pending_posts": [],   # videos awaiting /done or /no
+    "review_mode":   "auto",
+    "last_updated":  "",
 }
 
 MAX_POSTS_HISTORY  = 50
@@ -42,7 +54,10 @@ class StateManager:
 
     def __init__(self):
         self.gist_id      = os.environ.get("GIST_ID")
-        self.github_token = os.environ.get("GIST_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        # GIST_TOKEN has gist+repo scope; fall back to GITHUB_TOKEN
+        self.github_token = (
+            os.environ.get("GIST_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        )
         self.local_path   = Path("config.json")
         self._state: dict = self._load()
         self._reset_quota_if_new_day()
@@ -52,7 +67,7 @@ class StateManager:
     def has_quota(self) -> bool:
         q = self._state["quota"]
         return (
-            q["gemini_used_today"] < q["gemini_daily_limit"] and
+            q["gemini_used_today"]      < q["gemini_daily_limit"] and
             q["images_generated_today"] < q["image_daily_limit"]
         )
 
@@ -62,7 +77,7 @@ class StateManager:
         q["images_generated_today"] += images
         self._save()
 
-    # ── Posts + History ────────────────────────────────────────────────────────
+    # ── Posts + dedup ──────────────────────────────────────────────────────────
 
     def was_recently_posted(self, topic: str) -> bool:
         cutoff = time.time() - RECENT_TOPIC_HOURS * 3600
@@ -83,7 +98,7 @@ class StateManager:
         self._state["posts"].insert(0, post)
         self._state["posts"] = self._state["posts"][:MAX_POSTS_HISTORY]
 
-        # Also keep topic_history for autonomous deduplication
+        # Also record in topic_history for autonomous dedup
         hist = self._state.setdefault("topic_history", [])
         if topic not in hist:
             hist.insert(0, topic)
@@ -97,22 +112,23 @@ class StateManager:
     # ── Queue ──────────────────────────────────────────────────────────────────
 
     def get_topic_queue(self) -> list:
-        return list(self._state["topic_queue"])
+        return list(self._state.get("topic_queue", []))
 
     def add_to_queue(self, topic: str, post_type: str = "reel") -> str:
         item_id = str(uuid.uuid4())[:8]
-        self._state["topic_queue"].append({
+        self._state.setdefault("topic_queue", []).append({
             "id":       item_id,
             "topic":    topic,
             "type":     post_type,
             "added_at": datetime.now(timezone.utc).isoformat(),
         })
         self._save()
+        log.info(f"Queued: [{item_id}] {topic} ({post_type})")
         return item_id
 
     def remove_from_queue(self, item_id: str):
         self._state["topic_queue"] = [
-            i for i in self._state["topic_queue"] if i["id"] != item_id
+            i for i in self._state.get("topic_queue", []) if i["id"] != item_id
         ]
         self._save()
 
@@ -127,9 +143,14 @@ class StateManager:
 
     # ── Pending posts ──────────────────────────────────────────────────────────
 
-    def save_pending_post(self, pending_id: str, topic: str, content: dict, video_path: str):
-        pending = self._state.setdefault("pending_posts", [])
-        pending.append({
+    def save_pending_post(
+        self,
+        pending_id: str,
+        topic: str,
+        content: dict,
+        video_path: str,
+    ):
+        self._state.setdefault("pending_posts", []).append({
             "id":         pending_id,
             "topic":      topic,
             "content":    content,
@@ -163,10 +184,10 @@ class StateManager:
             "gemini_limit":  q["gemini_daily_limit"],
             "images_used":   q["images_generated_today"],
             "image_limit":   q["image_daily_limit"],
-            "queue_length":  len(self._state["topic_queue"]),
+            "queue_length":  len(self._state.get("topic_queue", [])),
             "pending_count": len(self._state.get("pending_posts", [])),
-            "total_posts":   len(self._state["posts"]),
-            "last_post":     self._state["posts"][0] if self._state["posts"] else None,
+            "total_posts":   len(self._state.get("posts", [])),
+            "last_post":     self._state["posts"][0] if self._state.get("posts") else None,
             "reset_date":    q["reset_date"],
             "review_mode":   self._state.get("review_mode", "auto"),
         }
@@ -177,9 +198,12 @@ class StateManager:
         if self.gist_id and self.github_token:
             try:
                 data = self._load_from_gist()
-                # Merge any missing keys from DEFAULT_STATE (handles schema upgrades)
+                # Merge any missing keys (handles schema upgrades)
                 for key, val in DEFAULT_STATE.items():
                     data.setdefault(key, val)
+                # Ensure quota sub-keys exist too
+                for key, val in DEFAULT_STATE["quota"].items():
+                    data["quota"].setdefault(key, val)
                 return data
             except Exception as e:
                 log.warning(f"Gist load failed: {e} — using local.")
@@ -187,8 +211,8 @@ class StateManager:
         if self.local_path.exists():
             with open(self.local_path) as f:
                 data = json.load(f)
-            for k, v in DEFAULT_STATE.items():
-                data.setdefault(k, v)
+            for key, val in DEFAULT_STATE.items():
+                data.setdefault(key, val)
             return data
 
         log.info("No state found — initialising defaults.")
@@ -208,30 +232,49 @@ class StateManager:
     def _load_from_gist(self) -> dict:
         r = requests.get(
             f"https://api.github.com/gists/{self.gist_id}",
-            headers={"Authorization": f"token {self.github_token}",
-                     "Accept": "application/vnd.github.v3+json"},
+            headers={
+                "Authorization": f"token {self.github_token}",
+                "Accept":        "application/vnd.github.v3+json",
+            },
             timeout=10,
         )
         r.raise_for_status()
-        for fname, fdata in r.json()["files"].items():
+        files = r.json()["files"]
+
+        # Always read from oracle_state.json specifically
+        if GIST_FILENAME in files:
+            return json.loads(files[GIST_FILENAME].get("content", "{}"))
+
+        # Fallback: first .json file (handles legacy setups)
+        for fname, fdata in files.items():
             if fname.endswith(".json"):
+                log.warning(f"oracle_state.json not found, reading {fname} instead")
                 return json.loads(fdata.get("content", "{}"))
+
         raise ValueError("No JSON file in Gist")
 
     def _save_to_gist(self):
         r = requests.patch(
             f"https://api.github.com/gists/{self.gist_id}",
-            headers={"Authorization": f"token {self.github_token}",
-                     "Content-Type": "application/json",
-                     "Accept": "application/vnd.github.v3+json"},
-            json={"files": {"oracle_state.json": {"content": json.dumps(self._state, indent=2)}}},
+            headers={
+                "Authorization": f"token {self.github_token}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/vnd.github.v3+json",
+            },
+            json={
+                "files": {
+                    GIST_FILENAME: {
+                        "content": json.dumps(self._state, indent=2)
+                    }
+                }
+            },
             timeout=10,
         )
         r.raise_for_status()
 
     def _reset_quota_if_new_day(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if self._state["quota"]["reset_date"] != today:
+        if self._state["quota"].get("reset_date") != today:
             log.info(f"New day ({today}) — resetting quota.")
             self._state["quota"]["gemini_used_today"]      = 0
             self._state["quota"]["images_generated_today"] = 0
