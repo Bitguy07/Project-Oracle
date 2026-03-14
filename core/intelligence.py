@@ -208,7 +208,7 @@ class IntelligenceEngine:
         shadow = color_scheme.get("shadow", "#000000")
         wrapped = "\n".join(textwrap.wrap(hook, width=18, break_long_words=False))
         line_count = wrapped.count("\n") + 1
-        font_size = {1: 96, 2: 84, 3: 72}.get(line_count, 64)
+        font_size = {1: 72, 2: 60, 3: 52}.get(line_count, 44)
         return [{
             "text": wrapped, "y_position": 0.30, "font_size": font_size,
             "color": accent, "shadow_color": shadow, "appear_at": 0.6, "bold": True,

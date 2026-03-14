@@ -27,8 +27,8 @@ log = logging.getLogger("oracle.renderer")
 OUTPUT_DIR = Path("assets/output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-FONT_BOLD    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONT_BOLD    = "/usr/share/fonts/truetype/ComicRelief-Bold.ttf"
+FONT_REGULAR = "/usr/share/fonts/truetype/ComicRelief-Regular.ttf"
 
 DIMENSIONS = {"reel": (1080, 1920), "feed": (1080, 1350)}
 VIDEO_DURATION = 30
