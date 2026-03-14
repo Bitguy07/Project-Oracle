@@ -1,24 +1,24 @@
 """
 core/video_renderer.py
 
-AI-Guided editing: video_style from IntelligenceEngine selects FFmpeg filter preset.
-  slow_zoom   — Ken Burns slow zoom (default)
-  static      — No movement, clean static image
-  pulse       — Subtle zoom pulse in/out rhythm
-  fade_drift  — Slow horizontal drift + fade
+Instagram API video requirements:
+  - Container: MP4, moov atom at front (faststart)
+  - Video codec: H264, progressive scan, closed GOP, yuv420p (4:2:0)
+  - Audio codec: AAC, max 48kHz sample rate, max 128kbps
+  - Frame rate: 23-60 FPS
+  - Aspect ratio: 9:16 for Reels (1080x1920)
+  - Min duration: 3 seconds
 
-Fade-in: First 1.5 seconds always fade from black. Always on.
-
-Instagram spec:
-  - MP4, H264, yuv420p, closed GOP
-  - AAC audio, 48kHz, 128kbps stereo
-  - moov atom at front (faststart)
-  - 9:16 for Reels (1080x1920)
+Features:
+  - AI-guided video styles: slow_zoom, static, pulse, fade_drift
+  - Fade-in from black (1.5s) — always on
+  - Ken Burns zoom effect
+  - Comic Relief font for text overlays
+  - Audio loops to fill full video duration (-stream_loop -1)
 """
 
 import hashlib
 import logging
-import math
 import subprocess
 from pathlib import Path
 
@@ -27,14 +27,26 @@ log = logging.getLogger("oracle.renderer")
 OUTPUT_DIR = Path("assets/output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Comic Relief font — installed from assets/fonts/ in workflow.yml
 FONT_BOLD    = "/usr/share/fonts/truetype/ComicRelief-Bold.ttf"
 FONT_REGULAR = "/usr/share/fonts/truetype/ComicRelief-Regular.ttf"
 
-DIMENSIONS = {"reel": (1080, 1920), "feed": (1080, 1350)}
+# Fallback to DejaVu if Comic Relief not installed (local dev)
+import os
+if not os.path.exists(FONT_BOLD):
+    FONT_BOLD    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+DIMENSIONS = {
+    "reel": (1080, 1920),
+    "feed": (1080, 1350),
+}
+
 VIDEO_DURATION = 30
 FRAMERATE      = 30
 AUDIO_FADE     = 2
-FADE_IN_DUR    = 1.5   # seconds — black to image
+FADE_IN_DUR    = 1.5
+KEN_BURNS_ZOOM = 0.04
 
 
 class VideoRenderer:
@@ -48,83 +60,57 @@ class VideoRenderer:
         video_style: str = "slow_zoom",
     ) -> Path:
         width, height = DIMENSIONS.get(post_type, (1080, 1920))
-        img_hash = hashlib.md5(str(image_path).encode()).hexdigest()[:10]
+        img_hash    = hashlib.md5(str(image_path).encode()).hexdigest()[:10]
         output_path = OUTPUT_DIR / f"{img_hash}_{post_type}.mp4"
 
         if not self._is_valid_audio(audio_path):
             log.warning("Invalid audio — using silent fallback.")
             audio_path = self._make_silent()
 
-        # Safety: Probe duration and calculate loops if needed
-        dur = self._probe_audio_duration(audio_path)
-        extra_loops = 0
-        if dur > 0 and dur < VIDEO_DURATION:
-            total_plays = math.ceil(VIDEO_DURATION / dur)
-            extra_loops = total_plays - 1
-            log.info(f"Audio short ({dur:.1f}s); looping {extra_loops} extra times for {VIDEO_DURATION}s video.")
-
-        fc = self._build_filter_complex(width, height, text_layers, video_style)
-        cmd = self._build_cmd(image_path, audio_path, output_path, fc, extra_loops)
+        fc  = self._build_filter_complex(width, height, text_layers, video_style)
+        cmd = self._build_cmd(image_path, audio_path, output_path, fc)
 
         log.info(f"Rendering [{video_style}]: {output_path.name}")
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
             log.error(f"FFmpeg stderr:\n{result.stderr}")
-            raise RuntimeError(f"FFmpeg failed (exit {result.returncode})")
+            raise RuntimeError(f"FFmpeg rendering failed (exit {result.returncode})")
 
         size_mb = output_path.stat().st_size / (1024 * 1024)
         log.info(f"Render complete: {output_path} ({size_mb:.1f} MB)")
         return output_path
 
-    def _probe_audio_duration(self, audio_path: Path) -> float:
-        try:
-            result = subprocess.run(
-                [
-                    "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                    "-of", "csv=p=0", str(audio_path)
-                ],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                return float(result.stdout.strip())
-        except (ValueError, subprocess.TimeoutExpired, Exception) as e:
-            log.warning(f"Failed to probe audio duration: {e}")
-        return 0.0
-
     def _build_filter_complex(
         self, width: int, height: int, text_layers: list[dict], video_style: str
     ) -> str:
-        filters = []
+        filters     = []
         total_frames = VIDEO_DURATION * FRAMERATE
-        fade_frames  = int(FADE_IN_DUR * FRAMERATE)
 
-        # ── Scale + crop ──────────────────────────────────────────────────────
+        # ── Scale + crop ──────────────────────────────────────────────────
         filters.append(
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},setsar=1[scaled]"
         )
 
-        # ── Motion style ──────────────────────────────────────────────────────
+        # ── Motion style ──────────────────────────────────────────────────
         motion = self._motion_filter(video_style, width, height, total_frames)
         filters.append(f"[scaled]{motion}[moved]")
 
-        # ── Fade in from black (always on) ────────────────────────────────────
-        filters.append(
-            f"[moved]fade=t=in:st=0:d={FADE_IN_DUR}[faded]"
-        )
+        # ── Fade in from black ─────────────────────────────────────────────
+        filters.append(f"[moved]fade=t=in:st=0:d={FADE_IN_DUR}[faded]")
 
-        # ── Text overlays ─────────────────────────────────────────────────────
+        # ── Text overlays ─────────────────────────────────────────────────
         prev = "faded"
         for i, layer in enumerate(text_layers):
             next_lbl = f"t{i}" if i < len(text_layers) - 1 else "vout"
-            font  = FONT_BOLD if layer.get("bold") else FONT_REGULAR
-            text  = self._escape(layer["text"])
-            color = layer.get("color", "#FFFFFF").lstrip("#")
-            shadow= layer.get("shadow_color", "#000000").lstrip("#")
-            size  = layer.get("font_size", 72)
-            y_pct = layer.get("y_position", 0.5)
-            appear= layer.get("appear_at", 0.6)
+            font   = FONT_BOLD if layer.get("bold") else FONT_REGULAR
+            text   = self._escape(layer["text"])
+            color  = layer.get("color",        "#FFD700").lstrip("#")
+            shadow = layer.get("shadow_color", "#000000").lstrip("#")
+            size   = layer.get("font_size",    60)
+            y_pct  = layer.get("y_position",   0.30)
+            appear = layer.get("appear_at",    0.6)
             filters.append(
                 f"[{prev}]drawtext="
                 f"fontfile='{font}':"
@@ -142,11 +128,11 @@ class VideoRenderer:
         if not text_layers:
             filters.append("[faded]copy[vout]")
 
-        # ── Audio ─────────────────────────────────────────────────────────────
+        # ── Audio: loop handled by -stream_loop, just fade + volume ───────
         filters.append(
             f"[1:a]asetpts=PTS-STARTPTS,"
             f"afade=t=in:st=0:d={AUDIO_FADE},"
-            f"afade=t=out:st={VIDEO_DURATION-AUDIO_FADE}:d={AUDIO_FADE},"
+            f"afade=t=out:st={VIDEO_DURATION - AUDIO_FADE}:d={AUDIO_FADE},"
             f"volume=0.4[aout]"
         )
 
@@ -159,8 +145,7 @@ class VideoRenderer:
             return f"trim=0:{VIDEO_DURATION},fps={FRAMERATE}"
 
         elif style == "pulse":
-            # Zooms in then back out rhythmically
-            zoom_expr = f"1+0.03*sin(2*PI*t/4)"
+            zoom_expr = "1+0.03*sin(2*PI*t/4)"
             return (
                 f"zoompan=z='{zoom_expr}':"
                 f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
@@ -168,20 +153,18 @@ class VideoRenderer:
             )
 
         elif style == "fade_drift":
-            # Slow horizontal drift left to right
-            drift = f"iw/2-(iw/zoom/2)+t*0.5"
+            drift = "iw/2-(iw/zoom/2)+t*0.5"
             return (
                 f"zoompan=z='1.05':"
                 f"x='{drift}':y='ih/2-(ih/zoom/2)':"
                 f"d={total_frames}:s={width}x{height}:fps={FRAMERATE}"
             )
 
-        else:
-            # slow_zoom (default) — classic Ken Burns
-            zoom_inc = 0.04 / total_frames
+        else:  # slow_zoom (default)
+            zoom_inc = KEN_BURNS_ZOOM / total_frames
             return (
                 f"zoompan="
-                f"z='min(zoom+{zoom_inc:.6f},1.04)':"
+                f"z='min(zoom+{zoom_inc:.6f},1+{KEN_BURNS_ZOOM})':"
                 f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d={total_frames}:s={width}x{height}:fps={FRAMERATE}"
             )
@@ -192,15 +175,11 @@ class VideoRenderer:
         audio_path: Path,
         output_path: Path,
         filter_complex: str,
-        extra_loops: int = 0,
     ) -> list[str]:
-        cmd = [
+        return [
             "ffmpeg", "-y",
-            "-loop", "1",
-            "-framerate", str(FRAMERATE),
-            "-i", str(image_path),
-            "-stream_loop", "-1",
-            "-i", str(audio_path),
+            "-loop", "1", "-framerate", str(FRAMERATE), "-i", str(image_path),
+            "-stream_loop", "-1", "-i", str(audio_path),  # loop audio to fill 30s
             "-filter_complex", filter_complex,
             "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "fast", "-crf", "22",
@@ -212,7 +191,6 @@ class VideoRenderer:
             "-movflags", "+faststart",
             str(output_path),
         ]
-        return cmd
 
     def _is_valid_audio(self, audio_path: Path) -> bool:
         try:

@@ -71,7 +71,6 @@ jobs:
           cp assets/fonts/ComicRelief-Bold.ttf /usr/share/fonts/truetype/
           fc-cache -fv
           ffmpeg -version | head -3
-
       # ── Python setup ──────────────────────────────────────────────────────
       - name: 🐍 Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -83,13 +82,11 @@ jobs:
       - name: 🔦 Install PyTorch CPU
         run: |
           pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
       # ── Python dependencies ────────────────────────────────────────────────
       - name: 📦 Install Python dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-
       # ── Cache MusicGen model weights (~300MB, downloads once) ─────────────
       - name: 🎵 Cache MusicGen weights
         uses: actions/cache@v4
@@ -112,7 +109,6 @@ jobs:
           [ -n "${{ secrets.GIST_ID }}" ]          && echo "✅ GIST_ID"          || echo "⚠️  GIST_ID not set (local config.json fallback)"
           [ -n "${{ secrets.GIST_TOKEN }}" ]       && echo "✅ GIST_TOKEN"       || echo "⚠️  GIST_TOKEN not set"
           [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && echo "✅ TELEGRAM_BOT_TOKEN" || echo "⚠️  TELEGRAM_BOT_TOKEN not set"
-
       # ── CRON / Autonomous mode ─────────────────────────────────────────────
       - name: 🤖 Run pipeline (CRON — autonomous)
         if: |
@@ -148,7 +144,6 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python main.py single "${{ github.event.inputs.topic }}" "${{ github.event.inputs.post_type }}"
-
       # ── Telegram command mode (repository_dispatch) ────────────────────────
       - name: 📲 Handle Telegram command
         if: github.event_name == 'repository_dispatch'

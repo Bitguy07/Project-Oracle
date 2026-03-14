@@ -2,9 +2,6 @@
 telegram_webhook_handler.py
 Called by GitHub Actions when a repository_dispatch event is received.
 Reads the Telegram update from TELEGRAM_UPDATE env var and processes it.
-
-This script bridges the gap between:
-  Telegram → (your relay service/Cloudflare Worker) → GitHub API → Actions → this script
 """
 
 import asyncio

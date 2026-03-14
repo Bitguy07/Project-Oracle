@@ -79,7 +79,7 @@ Return ONLY a single valid JSON object, nothing else:
 }}"""
 
 _FALLBACK = {
-    "topic": "inner silence",
+    "topic": "reflection",  # randomized in _normalize if fallback used
     "hook": "Silence speaks what words cannot.",
     "body": "In stillness, answers emerge.",
     "cta": "Save this.",
@@ -204,7 +204,7 @@ class IntelligenceEngine:
         return data
 
     def _build_text_layers(self, hook: str, color_scheme: dict) -> list[dict]:
-        accent = color_scheme.get("accent", "#FFF653")
+        accent = color_scheme.get("accent", "#FFD700")
         shadow = color_scheme.get("shadow", "#000000")
         wrapped = "\n".join(textwrap.wrap(hook, width=18, break_long_words=False))
         line_count = wrapped.count("\n") + 1

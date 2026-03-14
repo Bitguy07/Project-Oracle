@@ -7,7 +7,7 @@ The prompt is already a rich natural language sentence like:
   "dark cinematic ambient piano, slow tempo, no vocals, contemplative mood"
 
 Model: ~300MB, cached after first download.
-Generation: ~4-5 min for 30s on GitHub Actions CPU (2 cores). Acceptable for 6hr pipeline.
+Generation: ~4-5 min for 15s on GitHub Actions CPU (2 cores). Acceptable for 6hr pipeline.
 License: CC-BY-NC 4.0 — free for non-commercial Instagram content.
 
 Fallback: bundled MP3 from assets/bundled_audio/, then silent audio.
