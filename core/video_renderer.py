@@ -211,7 +211,7 @@ class VideoRenderer:
             "-t", str(VIDEO_DURATION),
             "-movflags", "+faststart",
             str(output_path),
-        ])
+        ]
         return cmd
 
     def _is_valid_audio(self, audio_path: Path) -> bool:
