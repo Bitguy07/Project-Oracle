@@ -144,7 +144,7 @@ class VideoRenderer:
 
         # ── Audio ─────────────────────────────────────────────────────────────
         filters.append(
-            f"[1:a]atrim=0:{VIDEO_DURATION},asetpts=PTS-STARTPTS,"
+            f"[1:a]asetpts=PTS-STARTPTS,"
             f"afade=t=in:st=0:d={AUDIO_FADE},"
             f"afade=t=out:st={VIDEO_DURATION-AUDIO_FADE}:d={AUDIO_FADE},"
             f"volume=0.4[aout]"
@@ -196,11 +196,10 @@ class VideoRenderer:
     ) -> list[str]:
         cmd = [
             "ffmpeg", "-y",
-            "-loop", "1", "-framerate", str(FRAMERATE), "-i", str(image_path),
-        ]
-        if extra_loops > 0:
-            cmd.extend(["-stream_loop", str(extra_loops)])
-        cmd.extend([
+            "-loop", "1",
+            "-framerate", str(FRAMERATE),
+            "-i", str(image_path),
+            "-stream_loop", "-1",
             "-i", str(audio_path),
             "-filter_complex", filter_complex,
             "-map", "[vout]", "-map", "[aout]",
