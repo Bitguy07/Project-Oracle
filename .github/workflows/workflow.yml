@@ -69,8 +69,8 @@ jobs:
             wget \
             --no-install-recommends
           # Download Comic Relief font from Google Fonts
-          wget -q "https://fonts.gstatic.com/s/comicrelief/v1/3XFqErgg3YsZ5fqUU9UPvWXuROTd.ttf" -O /usr/share/fonts/truetype/ComicRelief-Regular.ttf
-          wget -q "https://fonts.gstatic.com/s/comicrelief/v1/3XFpErgg3YsZ5fqUU9UPvWXuROTdACk.ttf" -O /usr/share/fonts/truetype/ComicRelief-Bold.ttf
+          cp assets/fonts/ComicRelief-Regular.ttf /usr/share/fonts/truetype/
+          cp assets/fonts/ComicRelief-Bold.ttf /usr/share/fonts/truetype/
           fc-cache -fv
           ffmpeg -version | head -3
 
