@@ -153,10 +153,11 @@ class VideoRenderer:
             )
 
         elif style == "fade_drift":
-            drift = "iw/2-(iw/zoom/2)+t*0.5"
+            # Use 'on' (output frame number) instead of 't' — available in zoompan
             return (
                 f"zoompan=z='1.05':"
-                f"x='{drift}':y='ih/2-(ih/zoom/2)':"
+                f"x='iw/2-(iw/zoom/2)+(on/{total_frames})*iw*0.03':"
+                f"y='ih/2-(ih/zoom/2)':"
                 f"d={total_frames}:s={width}x{height}:fps={FRAMERATE}"
             )
 
