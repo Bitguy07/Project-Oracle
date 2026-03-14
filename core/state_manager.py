@@ -223,9 +223,10 @@ class StateManager:
         if self.gist_id and self.github_token:
             try:
                 self._save_to_gist()
+                log.info("Gist state saved OK")
                 return
             except Exception as e:
-                log.warning(f"Gist save failed: {e} — saving locally.")
+                log.error(f"Gist save FAILED: {e} — saving locally (will not persist across jobs!)")
         with open(self.local_path, "w") as f:
             json.dump(self._state, f, indent=2)
 
@@ -254,23 +255,37 @@ class StateManager:
         raise ValueError("No JSON file in Gist")
 
     def _save_to_gist(self):
-        r = requests.patch(
-            f"https://api.github.com/gists/{self.gist_id}",
-            headers={
-                "Authorization": f"token {self.github_token}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/vnd.github.v3+json",
-            },
-            json={
-                "files": {
-                    GIST_FILENAME: {
-                        "content": json.dumps(self._state, indent=2)
-                    }
+        headers = {
+            "Authorization": f"token {self.github_token}",
+            "Content-Type":  "application/json",
+            "Accept":        "application/vnd.github.v3+json",
+        }
+        payload = {
+            "files": {
+                GIST_FILENAME: {
+                    "content": json.dumps(self._state, indent=2)
                 }
-            },
-            timeout=10,
-        )
-        r.raise_for_status()
+            }
+        }
+        last_exc = None
+        for attempt in range(3):
+            try:
+                r = requests.patch(
+                    f"https://api.github.com/gists/{self.gist_id}",
+                    headers=headers,
+                    json=payload,
+                    timeout=30,  # increased from 10s
+                )
+                r.raise_for_status()
+                log.debug(f"Gist saved OK (attempt {attempt+1})")
+                return
+            except Exception as e:
+                last_exc = e
+                log.warning(f"Gist save attempt {attempt+1}/3 failed: {e}")
+                if attempt < 2:
+                    import time as _time
+                    _time.sleep(2)
+        raise last_exc
 
     def _reset_quota_if_new_day(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
