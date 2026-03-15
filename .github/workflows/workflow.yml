@@ -88,14 +88,14 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       # ── Cache MusicGen model weights (~300MB, downloads once) ─────────────
-      - name: 🎵 Cache MusicGen weights
+      - name: 🎵 Cache model weights (MusicGen + Stable Diffusion)
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/huggingface
             /root/.cache/huggingface
-          key: musicgen-small-v1
-          restore-keys: musicgen-small-
+          key: models-musicgen-sd21-v1
+          restore-keys: models-musicgen-sd21-
 
       # ── Verify secrets ────────────────────────────────────────────────────
       - name: 🔐 Verify required secrets
