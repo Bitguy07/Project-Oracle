@@ -16,6 +16,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import urllib.parse
 import httpx
 
 log = logging.getLogger("oracle.image")
@@ -34,7 +35,7 @@ class ImageGenerator:
     def __init__(self):
         self.hf_token = os.environ.get("HF_TOKEN")
         if not self.hf_token:
-            raise EnvironmentError("HF_TOKEN not set.")
+            log.warning("HF_TOKEN not set — using Pollinations.ai (no token needed).")
 
     async def generate(
         self,
@@ -82,6 +83,36 @@ class ImageGenerator:
                     await asyncio.sleep(3)
         raise last_exc
 
+    # async def _call(self, prompt: str, post_type: str, out: Path, w: int, h: int) -> Path:
+    #     aspect = ASPECT_HINTS.get(post_type, "portrait 9:16 vertical")
+    #     enhanced = (
+    #         f"{prompt}. {aspect}. "
+    #         "Cinematic dramatic lighting, dark moody atmosphere, "
+    #         "ultra high quality, professional photography, Instagram-ready. "
+    #         "No text, no watermarks."
+    #     )
+    #     log.info(f"FLUX.1-schnell | {post_type} | {w}x{h}")
+
+    #     async with httpx.AsyncClient(timeout=120) as c:
+    #         r = await c.post(
+    #             HF_URL,
+    #             headers={
+    #                 "Authorization": f"Bearer {self.hf_token}",
+    #                 "Content-Type": "application/json",
+    #             },
+    #             json={"inputs": enhanced},
+    #         )
+
+    #     if r.status_code != 200:
+    #         raise RuntimeError(f"HF {r.status_code}: {r.text[:200]}")
+
+    #     if r.content[:2] not in (b'\xff\xd8', b'\x89P'):
+    #         raise RuntimeError(f"Response is not an image: {r.content[:50]}")
+
+    #     out.write_bytes(r.content)
+    #     log.info(f"Image saved: {out} ({len(r.content)//1024} KB)")
+    #     return out
+
     async def _call(self, prompt: str, post_type: str, out: Path, w: int, h: int) -> Path:
         aspect = ASPECT_HINTS.get(post_type, "portrait 9:16 vertical")
         enhanced = (
@@ -90,20 +121,16 @@ class ImageGenerator:
             "ultra high quality, professional photography, Instagram-ready. "
             "No text, no watermarks."
         )
-        log.info(f"FLUX.1-schnell | {post_type} | {w}x{h}")
+        log.info(f"Pollinations.ai | {post_type} | {w}x{h}")
 
-        async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(
-                HF_URL,
-                headers={
-                    "Authorization": f"Bearer {self.hf_token}",
-                    "Content-Type": "application/json",
-                },
-                json={"inputs": enhanced},
-            )
+        encoded = urllib.parse.quote(enhanced)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width={w}&height={h}&nologo=true&model=flux"
+
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            r = await c.get(url)
 
         if r.status_code != 200:
-            raise RuntimeError(f"HF {r.status_code}: {r.text[:200]}")
+            raise RuntimeError(f"Pollinations {r.status_code}: {r.text[:200]}")
 
         if r.content[:2] not in (b'\xff\xd8', b'\x89P'):
             raise RuntimeError(f"Response is not an image: {r.content[:50]}")
@@ -111,7 +138,7 @@ class ImageGenerator:
         out.write_bytes(r.content)
         log.info(f"Image saved: {out} ({len(r.content)//1024} KB)")
         return out
-
+    
     def _gradient(self, w: int, h: int, out: Path, color_scheme: dict) -> Path:
         """
         Fallback gradient using AI-generated color_scheme.
