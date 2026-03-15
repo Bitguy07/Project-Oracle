@@ -2,9 +2,7 @@
 core/intelligence.py
 
 Two modes, one pipeline:
-  AUTONOMOUS  — AI generates content based on time of day (IST UTC+5:30).
-                Morning: struggle/strategy, Afternoon: sarcasm/humor,
-                Evening: spiritual/family/love, Night: heartbreak/longing.
+  AUTONOMOUS  — AI generates everything from scratch, checks history to avoid repeats.
   MANUAL      — User provides free-form topic/music hints in any language/style.
 
 Both modes return identical structured output so downstream code is unchanged.
@@ -16,89 +14,35 @@ import logging
 import os
 import re
 import textwrap
-from datetime import datetime, timezone, timedelta
 
 from google import genai
 from google.genai import types
 
 log = logging.getLogger("oracle.intelligence")
 
-MODEL      = "gemini-2.5-flash"
+MODEL = "gemini-2.5-flash"
 MAX_TOKENS = 8192
 
-IST = timezone(timedelta(hours=5, minutes=30))
-
-
-def _get_time_directive() -> str:
-    hour = datetime.now(IST).hour
-
-    if 6 <= hour < 12:
-        return """TIME SLOT: Morning (people are starting their day, ambitious, motivated)
-CONTENT DIRECTION: Raw struggle and strategy. Stories of people who fought hard for success
-against all odds. Practical wisdom on protecting yourself from people who want to pull you down.
-Real talk about hustle, sacrifice, and winning in silence. Think street-smart advice,
-lessons learned the hard way, how winners think differently. Tone: fierce, direct, empowering.
-Music should be: epic, motivational, building intensity, powerful drums."""
-
-    elif 12 <= hour < 18:
-        return """TIME SLOT: Afternoon (people are taking breaks, scrolling casually, need entertainment)
-CONTENT DIRECTION: Sharp sarcasm and dark humor about everyday life situations everyone relates to.
-Funny observations about modern life, relationships, work, social media, society double standards.
-The kind of content that makes someone laugh and immediately share with a friend.
-Tone: witty, cutting, unexpectedly deep. Commentary that stings because it is true.
-Music should be: upbeat, quirky, playful with attitude, light percussion."""
-
-    elif 18 <= hour < 22:
-        return """TIME SLOT: Evening (people are winding down, feeling reflective and emotional)
-CONTENT DIRECTION: Warmth, connection, and depth. Stories about family bonds, the kind of love
-that stays quiet but never leaves, spiritual moments of gratitude and peace, the beauty of
-simple human connections. Makes someone feel less alone and more grateful.
-Tone: tender, meaningful, grounding. Things people wish they had said to their parents.
-Music should be: soft, warm, gentle piano or strings, peaceful, soothing."""
-
-    else:
-        return """TIME SLOT: Night (people are alone with their thoughts, emotionally open)
-CONTENT DIRECTION: Heartbreak, longing, and the kind of love that never fully healed.
-Stories of people who still remember small details about someone who left. The 3am thoughts
-nobody talks about. Love that was real but was not enough. Missing someone who has moved on.
-Unrequited love. The version of someone you still carry inside you years later.
-Tone: raw, aching, beautifully melancholic. Diary entries, things said too late.
-Music should be: slow, melancholic, haunting, minimal piano or ambient, deeply emotional."""
-
-
-AUTONOMOUS_PROMPT = """You are a master Instagram content creator who deeply understands human psychology.
-Your content stops people mid-scroll because it touches something real inside them.
-
-{time_directive}
+AUTONOMOUS_PROMPT = """You are a viral Instagram content creator and psychologist.
+Your reels make people stop scrolling, feel something deep, and save or share the post.
 
 HISTORY (topics already used — do NOT repeat these themes):
 {history}
 
-Create completely original content for a {post_type} that fits the time slot direction above.
-Do NOT mention the time slot explicitly. Just create content that naturally fits that emotional space.
-
-HOOK RULES — the hook is the text shown on the video:
-- Must be 12-20 words — long enough to carry full meaning and emotional weight
-- Should feel like a complete thought, a realization, a confession, or a story opener
-- Vary the style — sometimes a statement, sometimes an observation, sometimes a revelation
-- Never just a question alone — that is lazy writing
-- No colons. Write like a human being, not a headline writer.
-- Good examples:
-  "The day I stopped explaining myself to everyone, everything in my life became clearer."
-  "Some people leave your life but never leave your mind, no matter how many years pass."
-  "Nobody talks about how lonely success feels when you have nobody to call at night."
-  "Your parents worked themselves to exhaustion so you could have options they never had."
-  "The funniest thing about life is how seriously we take people who do not even think about us."
+Your task: Invent a completely original topic and create content for a {post_type}.
+Use psychological principles — curiosity gap, emotional resonance, pattern interruption.
+The hook must make someone stop mid-scroll.
 
 Return ONLY a single valid JSON object, nothing else:
 {{
   "topic": "2-4 word topic label for history tracking",
   "hook": "One punch-in-the-gut sentence. Max 8 words. No colons.",
-  "body": "2 sentences expanding the idea for caption. Max 25 words.",
-  "cta": "One natural action. Max 6 words.",
-  "caption": "Max 150 chars. Natural hook + body + cta.",
+  "body": "2 sentences expanding the idea. Max 25 words. Caption only.",
+  "cta": "One action. Max 6 words.",
+  "caption": "Max 100 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
-  "image_prompt": "Cinematic scene matching topic emotion. Max 20 words. No text in image.",
+  "image_prompt": "Cinematic scene. Max 20 words. Dramatic lighting. No text in image.",
+  "music_prompt": "Descriptive MusicGen sentence. E.g.: dark cinematic ambient piano, slow tempo, no vocals, contemplative.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
@@ -107,30 +51,25 @@ Return ONLY a single valid JSON object, nothing else:
   }}
 }}"""
 
-MANUAL_PROMPT = """You are a master Instagram content creator who deeply understands human psychology.
+MANUAL_PROMPT = """You are a viral Instagram content creator and psychologist.
 
-The user gave this instruction (may be Hinglish, broken English, or emotional):
-TOPIC: "{topic_raw}"
+The user gave this free-form instruction (may be Hinglish, broken English, emotional):
+TOPIC DESCRIPTION: "{topic_raw}"
 MUSIC HINT: "{music_raw}"
 
-Interpret their intent deeply. Create content for a {post_type} that captures exactly
-what they are feeling or trying to express.
-
-HOOK RULES:
-- The hook is the text shown on the video itself
-- 12-20 words — long enough to carry full meaning and emotional weight
-- Complete thought, realization, confession, or story opener
-- No colons. Write like a human.
+Interpret their intent deeply. If music_raw is empty, derive the perfect music style
+from the emotional tone of the topic. Create scroll-stopping content.
 
 Return ONLY a single valid JSON object, nothing else:
 {{
   "topic": "2-4 word topic label",
   "hook": "One punch-in-the-gut sentence. Max 8 words. No colons.",
   "body": "2 sentences. Max 25 words. Caption only.",
-  "cta": "One natural action. Max 6 words.",
-  "caption": "Max 150 chars. Natural hook + body + cta.",
+  "cta": "One action. Max 6 words.",
+  "caption": "Max 100 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
   "image_prompt": "Cinematic scene matching topic emotion. Max 20 words. No text in image.",
+  "music_prompt": "Descriptive MusicGen sentence matching the mood. No vocals.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
@@ -140,16 +79,16 @@ Return ONLY a single valid JSON object, nothing else:
 }}"""
 
 _FALLBACK = {
-    "topic":        "late night thoughts",
-    "hook":         "Some people leave your life but never really leave your mind no matter how hard you try.",
-    "body":         "The ones who mattered most stay with you in ways you cannot explain.",
-    "cta":          "Save this if you felt it.",
-    "caption":      "Some people leave your life but never really leave your mind. Save this if you felt it.",
-    "image_prompt": "Dark cinematic landscape, single light in distance, solitary figure, emotional atmosphere.",
-    "music_prompt": "slow melancholic piano, minimal, haunting, no vocals, late night emotional mood",
-    "video_style":  "slow_zoom",
+    "topic": "inner silence",
+    "hook": "Silence speaks what words cannot.",
+    "body": "In stillness, answers emerge.",
+    "cta": "Save this.",
+    "caption": "Silence speaks what words cannot. In stillness, answers emerge. Save this.",
+    "image_prompt": "Dark cinematic landscape, storm clouds, single beam of light.",
+    "music_prompt": "dark cinematic ambient piano, slow tempo, no vocals, contemplative mood",
+    "video_style": "slow_zoom",
     "color_scheme": {"primary": "#FFFFFF", "accent": "#FFD700", "shadow": "#000000"},
-    "hashtags":     ["#feelings", "#latenightthoughts", "#heartfelt", "#realness", "#emotions", "#relatable"],
+    "hashtags": ["#mindset", "#wisdom", "#motivation", "#clarity", "#growth", "#inspiration"],
 }
 
 
@@ -162,20 +101,13 @@ class IntelligenceEngine:
         self.client = genai.Client(api_key=api_key)
 
     async def generate_autonomous(self, post_type: str, history: list[str]) -> dict:
-        """AI invents everything based on current IST time of day."""
-        history_str    = "\n".join(f"- {t}" for t in history[-10:]) if history else "None yet."
-        time_directive = _get_time_directive()
-        ist_time       = datetime.now(IST).strftime("%H:%M IST")
-        log.info(f"Time-based content | {ist_time} | directive applied")
-        prompt = AUTONOMOUS_PROMPT.format(
-            time_directive=time_directive,
-            history=history_str,
-            post_type=post_type,
-        )
+        """AI invents everything. history = last N topic strings."""
+        history_str = "\n".join(f"- {t}" for t in history[-10:]) if history else "None yet."
+        prompt = AUTONOMOUS_PROMPT.format(history=history_str, post_type=post_type)
         return await self._run(prompt, post_type)
 
     async def generate_manual(self, topic_raw: str, music_raw: str, post_type: str) -> dict:
-        """Interprets user free-form input in any language/style."""
+        """Interprets user's free-form input in any language/style."""
         prompt = MANUAL_PROMPT.format(
             topic_raw=topic_raw,
             music_raw=music_raw or "",
@@ -187,9 +119,9 @@ class IntelligenceEngine:
         data = None
         for attempt in range(2):
             try:
-                raw  = await self._call_gemini(prompt)
+                raw = await self._call_gemini(prompt)
                 data = json.loads(self._extract_json(raw))
-                log.info(f"Content OK — hook='{data.get('hook','')[:60]}'")
+                log.info(f"Content OK — hook='{data.get('hook','')[:50]}'")
                 break
             except Exception as e:
                 log.warning(f"Attempt {attempt+1}/2 failed: {e}")
@@ -200,8 +132,8 @@ class IntelligenceEngine:
             log.error("Both attempts failed — using fallback.")
             data = dict(_FALLBACK)
 
-        data         = self._normalize(data)
-        hashtags     = data.get("hashtags", [])
+        data = self._normalize(data)
+        hashtags = data.get("hashtags", [])
         full_caption = f"{data['caption'].strip()}\n\n{' '.join(hashtags)}".strip()
 
         return {
@@ -224,8 +156,8 @@ class IntelligenceEngine:
             model=MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.9,
-                topP=0.95,
+                temperature=0.85,
+                topP=0.92,
                 maxOutputTokens=MAX_TOKENS,
                 response_mime_type="application/json",
             ),
@@ -238,7 +170,7 @@ class IntelligenceEngine:
         if not raw:
             for c in (getattr(response, "candidates", None) or []):
                 parts = getattr(getattr(c, "content", None), "parts", []) or []
-                raw   = "".join(p.text for p in parts if hasattr(p, "text") and p.text)
+                raw = "".join(p.text for p in parts if hasattr(p, "text") and p.text)
                 if raw:
                     break
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
