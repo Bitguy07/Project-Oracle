@@ -93,7 +93,7 @@ HOOK RULES — the hook is the text shown on the video:
 Return ONLY a single valid JSON object, nothing else:
 {{
   "topic": "2-4 word topic label for history tracking",
-  "hook": "Video text. 12-20 words. Complete thought. No colons. Emotionally resonant.",
+  "hook": "One punch-in-the-gut sentence. Max 8 words. No colons.",
   "body": "2 sentences expanding the idea for caption. Max 25 words.",
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
@@ -125,7 +125,7 @@ HOOK RULES:
 Return ONLY a single valid JSON object, nothing else:
 {{
   "topic": "2-4 word topic label",
-  "hook": "Video text. 12-20 words. Complete thought. Emotionally resonant. No colons.",
+  "hook": "One punch-in-the-gut sentence. Max 8 words. No colons.",
   "body": "2 sentences. Max 25 words. Caption only.",
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
@@ -274,7 +274,7 @@ class IntelligenceEngine:
     def _build_text_layers(self, hook: str, color_scheme: dict) -> list[dict]:
         accent     = color_scheme.get("accent", "#FFD700")
         shadow     = color_scheme.get("shadow", "#000000")
-        wrapped    = "\n".join(textwrap.wrap(hook, width=45, break_long_words=False))
+        wrapped    = "\n".join(textwrap.wrap(hook, width=35, break_long_words=False))
         line_count = wrapped.count("\n") + 1
         font_size  = {1: 58, 2: 48, 3: 40, 4: 36}.get(line_count, 36)
         return [{
@@ -284,5 +284,5 @@ class IntelligenceEngine:
             "color":        accent,
             "shadow_color": shadow,
             "appear_at":    0.6,
-            "bold":         True,
+            "bold":         false,
         }]
