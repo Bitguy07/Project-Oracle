@@ -274,12 +274,12 @@ class IntelligenceEngine:
     def _build_text_layers(self, hook: str, color_scheme: dict) -> list[dict]:
         accent     = color_scheme.get("accent", "#FFD700")
         shadow     = color_scheme.get("shadow", "#000000")
-        wrapped    = "\n".join(textwrap.wrap(hook, width=60, break_long_words=False))
+        wrapped    = "\n".join(textwrap.wrap(hook, width=45, break_long_words=False))
         line_count = wrapped.count("\n") + 1
         font_size  = {1: 58, 2: 48, 3: 40, 4: 36}.get(line_count, 36)
         return [{
             "text":         wrapped,
-            "y_position":   0.30,
+            "y_position":   0.25,
             "font_size":    font_size,
             "color":        accent,
             "shadow_color": shadow,
