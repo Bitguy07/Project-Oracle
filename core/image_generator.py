@@ -23,8 +23,7 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 DIMENSIONS   = {"reel": (1080, 1920), "feed": (1080, 1350)}
 ASPECT_HINTS = {"reel": "portrait 9:16 vertical", "feed": "portrait 4:5 vertical"}
 
-MODEL_ID = "stabilityai/stable-diffusion-2-1-base"
-
+MODEL_ID = "OFA-Sys/small-stable-diffusion-v0"
 
 class ImageGenerator:
 
