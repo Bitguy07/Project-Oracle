@@ -98,8 +98,7 @@ Return ONLY a single valid JSON object, nothing else:
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
-  "image_prompt": "Cinematic scene matching the emotional tone. Max 20 words. No text in image.",
-  "music_prompt": "Specific MusicGen prompt. Name instruments, tempo, emotion. No vocals.",
+  "image_prompt": "RAW photography style. Gritty, textured, real. Shot on film. High contrast. No soft edges, no AI smoothness, no dreamy blur. Max 20 words. No text in image.",  "music_prompt": "Specific MusicGen prompt. Name instruments, tempo, emotion. No vocals.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
@@ -131,8 +130,7 @@ Return ONLY a single valid JSON object, nothing else:
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
-  "image_prompt": "Cinematic scene matching topic emotion. Max 20 words. No text in image.",
-  "music_prompt": "Specific MusicGen prompt. Instruments, tempo, emotion. No vocals.",
+  "image_prompt": "RAW photography style. Gritty, textured, real. Shot on film. High contrast. No soft edges, no AI smoothness, no dreamy blur. Max 20 words. No text in image.",  "music_prompt": "Specific MusicGen prompt. Instruments, tempo, emotion. No vocals.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
