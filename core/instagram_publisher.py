@@ -170,7 +170,7 @@ class InstagramPublisher:
                 r = await c.delete(
                     f"{GH_API}/repos/{REPO}/contents/{self._temp_path}",
                     headers=headers,
-                    content=body,
+                    data=body,
                 )
             if r.status_code == 200:
                 log.info(f"Deleted: {self._temp_path}")

@@ -336,12 +336,30 @@ async def cron_run():
                 mode="manual",
             )
             state.remove_from_queue(item["id"])
-            if result["status"] == "success":
+            if result.get("status") == "success":
+                try:
+                    bot = TelegramBot()
+                    await bot.send_message(
+                        f"🤖 <b>Auto-posted!</b>\n"
+                        f"Topic: <b>{result.get('topic', '')}</b>\n"
+                        f"IG ID: <code>{result.get('ig_post_id')}</code>"
+                    )
+                except Exception as e:
+                    log.warning(f"Telegram notify failed: {e}")
                 await asyncio.sleep(30)
     else:
         log.info("Queue empty — autonomous generation.")
-        await run_pipeline(post_type="reel", mode="autonomous")
-
+        result = await run_pipeline(post_type="reel", mode="autonomous")
+        if result.get("status") == "success":
+            try:
+                bot = TelegramBot()
+                await bot.send_message(
+                    f"🤖 <b>Auto-posted!</b>\n"
+                    f"Topic: <b>{result.get('topic', '')}</b>\n"
+                    f"IG ID: <code>{result.get('ig_post_id')}</code>"
+                )
+            except Exception as e:
+                log.warning(f"Telegram notify failed: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
