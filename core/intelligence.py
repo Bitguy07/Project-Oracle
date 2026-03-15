@@ -98,7 +98,7 @@ Return ONLY a single valid JSON object, nothing else:
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
-  "image_prompt": "RAW photography style. Gritty, textured, real. Shot on film. High contrast. No soft edges, no AI smoothness, no dreamy blur. Max 20 words. No text in image.",  "music_prompt": "Specific MusicGen prompt. Name instruments, tempo, emotion. No vocals.",
+  "image_prompt": "Cinematic scene matching topic emotion. Max 20 words. No text in image.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
@@ -130,7 +130,7 @@ Return ONLY a single valid JSON object, nothing else:
   "cta": "One natural action. Max 6 words.",
   "caption": "Max 150 chars. Natural hook + body + cta.",
   "hashtags": ["#tag1","#tag2","#tag3","#tag4","#tag5","#broad"],
-  "image_prompt": "RAW photography style. Gritty, textured, real. Shot on film. High contrast. No soft edges, no AI smoothness, no dreamy blur. Max 20 words. No text in image.",  "music_prompt": "Specific MusicGen prompt. Instruments, tempo, emotion. No vocals.",
+  "image_prompt": "Cinematic scene matching topic emotion. Max 20 words. No text in image.",
   "video_style": "One of: slow_zoom, static, pulse, fade_drift",
   "color_scheme": {{
     "primary": "#FFFFFF",
@@ -274,9 +274,9 @@ class IntelligenceEngine:
     def _build_text_layers(self, hook: str, color_scheme: dict) -> list[dict]:
         accent     = color_scheme.get("accent", "#FFD700")
         shadow     = color_scheme.get("shadow", "#000000")
-        wrapped    = "\n".join(textwrap.wrap(hook, width=80, break_long_words=False))
+        wrapped    = "\n".join(textwrap.wrap(hook, width=60, break_long_words=False))
         line_count = wrapped.count("\n") + 1
-        font_size  = {1: 64, 2: 54, 3: 46, 4: 40}.get(line_count, 36)
+        font_size  = {1: 58, 2: 48, 3: 40, 4: 36}.get(line_count, 36)
         return [{
             "text":         wrapped,
             "y_position":   0.30,
