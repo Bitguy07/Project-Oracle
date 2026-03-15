@@ -284,5 +284,5 @@ class IntelligenceEngine:
             "color":        accent,
             "shadow_color": shadow,
             "appear_at":    0.6,
-            "bold":         false,
+            "bold":         False,
         }]
